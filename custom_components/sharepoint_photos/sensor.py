@@ -26,6 +26,15 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _select_photo_url(photo: Dict[str, Any]) -> Optional[str]:
+    """Return the most reliable URL for a photo (proxy first)."""
+    for key in ("proxy_url", "url", "thumbnail_url", "download_url", "web_url"):
+        url = photo.get(key)
+        if url:
+            return url
+    return None
+
+
 SENSOR_DESCRIPTIONS = [
     SensorEntityDescription(
         key=SENSOR_CURRENT_FOLDER,
@@ -126,7 +135,8 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
             if not photos:
                 return None
             
-            photo_urls = [photo.get("url") for photo in photos if photo.get("url")]
+            photo_urls = [_select_photo_url(photo) for photo in photos]
+            photo_urls = [url for url in photo_urls if url]
             if not photo_urls:
                 return None
             
@@ -150,7 +160,8 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
         if self.entity_description.key == SENSOR_CURRENT_FOLDER:
             # For the main folder sensor, include all photo URLs
             photos = data.get("photos", [])
-            photo_urls = [photo.get("url") for photo in photos if photo.get("url")]
+            photo_urls = [_select_photo_url(photo) for photo in photos]
+            photo_urls = [url for url in photo_urls if url]
             
             # Calculate rotating picture URL (changes every 10 seconds)
             current_picture_url = ""
@@ -162,10 +173,15 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
                 picture_index = current_cycle % len(photo_urls)
                 current_picture_url = photo_urls[picture_index]
             
+            current_photo = None
+            if photos and photo_urls:
+                current_photo = photos[picture_index]
+
             return {
                 "photos": photos,
                 "photo_urls": photo_urls,
                 "current_picture_url": current_picture_url,
+                "current_picture_label": current_photo.get("name") if current_photo else None,
                 "folder_path": data.get("folder_path"),
                 "photo_count": len(photos),
                 "rotation_cycle_seconds": 10,
@@ -187,7 +203,8 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
             if not photos:
                 return None
             
-            photo_urls = [photo.get("url") for photo in photos if photo.get("url")]
+            photo_urls = [_select_photo_url(photo) for photo in photos]
+            photo_urls = [url for url in photo_urls if url]
             if not photo_urls:
                 return None
             
@@ -257,21 +274,20 @@ class SharePointPhotosRotatingSensor(CoordinatorEntity, SensorEntity):
         data = self.coordinator.data
         photos = data.get("photos", [])
         if not photos:
-            return "No photos"
+            return None
         
-        photo_urls = [photo.get("url") for photo in photos if photo.get("url")]
+        photo_urls = [_select_photo_url(photo) for photo in photos]
+        photo_urls = [url for url in photo_urls if url]
         if not photo_urls:
-            return "No URLs"
+            return None
         
-        # Return a short state with current photo info instead of the long URL
+        # Return proxy/thumbnail URL for the current photo so dashboards can load it directly
         import time
         cycle_time = 10  # seconds
         current_cycle = int(time.time() / cycle_time)
         picture_index = current_cycle % len(photo_urls)
         
-        # Get photo name if available
-        photo_name = photos[picture_index].get("name", f"photo_{picture_index + 1}")
-        return f"Photo {picture_index + 1}: {photo_name}"
+        return photo_urls[picture_index]
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
@@ -281,7 +297,8 @@ class SharePointPhotosRotatingSensor(CoordinatorEntity, SensorEntity):
 
         data = self.coordinator.data
         photos = data.get("photos", [])
-        photo_urls = [photo.get("url") for photo in photos if photo.get("url")]
+        photo_urls = [_select_photo_url(photo) for photo in photos]
+        photo_urls = [url for url in photo_urls if url]
         
         # Calculate current index for display
         import time
@@ -296,6 +313,7 @@ class SharePointPhotosRotatingSensor(CoordinatorEntity, SensorEntity):
             "current_index": current_index + 1,  # 1-based for display
             "current_photo_url": photo_urls[current_index] if photo_urls else None,
             "current_photo_name": current_photo.get("name") if current_photo else None,
+            "current_photo_label": f"Photo {current_index + 1}: {current_photo.get('name')}" if current_photo else None,
             "cycle_time_seconds": 10,
             "folder_name": data.get("folder_name"),
         }
@@ -331,21 +349,10 @@ class SharePointPhotosRotatingSensor(CoordinatorEntity, SensorEntity):
         picture_index = current_cycle % len(photos)
         
         current_photo = photos[picture_index]
-        
-        # Prefer proxy URL for full quality, then thumbnail for shorter URL, then original URL
-        if current_photo.get("proxy_url"):
-            proxy_url = current_photo["proxy_url"]
-            _LOGGER.debug("Entity picture using proxy URL: %s", proxy_url)
-            return proxy_url
-        elif current_photo.get("thumbnail_url"):
-            thumbnail_url = current_photo["thumbnail_url"]
-            _LOGGER.debug("Entity picture using thumbnail URL: %s", thumbnail_url)
-            return thumbnail_url
-        else:
-            # Use the url field which now prioritizes thumbnail over download URL
-            original_url = current_photo.get("url")
-            _LOGGER.debug("Entity picture using URL field: %s", original_url[:100] if original_url else "None")
-            return original_url
+        preferred_url = _select_photo_url(current_photo)
+        if preferred_url:
+            _LOGGER.debug("Entity picture using URL: %s", preferred_url[:100])
+        return preferred_url
 
     @property
     def available(self) -> bool:
