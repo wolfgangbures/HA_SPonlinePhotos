@@ -1,6 +1,7 @@
 # SharePoint Photos Integration for Home Assistant
 
 A complete Home Assistant custom integration that displays random photos from your SharePoint folders.
+This code was generatde by GPT5.1-Codex.
 
 ## Features
 
