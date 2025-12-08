@@ -1,0 +1,20 @@
+refresh_photos:
+  name: Refresh photos
+  description: Get a new random photo folder from SharePoint
+  target:
+    entity:
+      integration: sharepoint_photos
+
+select_folder:
+  name: Select specific folder
+  description: Select a specific folder by path
+  target:
+    entity:
+      integration: sharepoint_photos
+  fields:
+    folder_path:
+      name: Folder path
+      description: Path to the SharePoint folder (e.g., /Photos/2024/January)
+      required: true
+      selector:
+        text:

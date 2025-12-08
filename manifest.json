@@ -1,0 +1,16 @@
+{
+  "domain": "sharepoint_photos",
+  "name": "SharePoint Photos",
+  "codeowners": ["@wolfgangbures"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/wolfgangbures/sharepoint-photos-ha",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/wolfgangbures/sharepoint-photos-ha/issues",
+  "requirements": [
+    "aiohttp>=3.8.0",
+    "msal>=1.20.0"
+  ],
+  "version": "1.0.0"
+}

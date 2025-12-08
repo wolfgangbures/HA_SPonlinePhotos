@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SharePoint Photos",
+        "description": "Configure your SharePoint connection to display random photos from your folders.",
+        "data": {
+          "tenant_id": "Azure AD Tenant ID",
+          "client_id": "Application (client) ID",
+          "client_secret": "Client Secret",
+          "site_url": "SharePoint Site URL",
+          "library_name": "Document Library Name",
+          "base_folder_path": "Base Folder Path"
+        },
+        "data_description": {
+          "tenant_id": "Your Azure Active Directory tenant ID (GUID)",
+          "client_id": "The application ID from your Azure AD app registration",
+          "client_secret": "The client secret generated for your app registration",
+          "site_url": "Full URL to your SharePoint site (e.g., https://yourdomain.sharepoint.com/sites/photos)",
+          "library_name": "Name of the document library containing your photos. Common values: 'Documents' (English), 'Freigegebene Dokumente' (German), 'Shared Documents'",
+          "base_folder_path": "Path to the folder containing your photo folders (e.g., /Photos, /General/Fotos)"
+        }
+      }
+    },
+    "error": {
+      "authentication_failed": "Authentication failed. Please check your credentials.",
+      "site_not_found": "SharePoint site not found. Please check the site URL.",
+      "library_not_found": "Document library not found. Please check the library name.",
+      "folder_not_found": "Base folder not found. Please check the folder path.",
+      "network_error": "Network error. Please check your internet connection.",
+      "unknown": "Unknown error occurred. Please check the logs."
+    },
+    "abort": {
+      "already_configured": "SharePoint site is already configured",
+      "single_instance_allowed": "Only a single configuration of SharePoint Photos is allowed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SharePoint Photos Options",
+        "description": "Configure additional options for SharePoint Photos.",
+        "data": {
+          "library_name": "Document Library Name",
+          "base_folder_path": "Base Folder Path"
+        }
+      }
+    }
+  }
+}
