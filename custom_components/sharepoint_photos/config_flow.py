@@ -14,10 +14,12 @@ from .const import (
     CONF_BASE_FOLDER_PATH,
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
+    CONF_FOLDER_HISTORY_SIZE,
     CONF_LIBRARY_NAME,
     CONF_SITE_URL,
     CONF_TENANT_ID,
     DEFAULT_BASE_FOLDER_PATH,
+    DEFAULT_FOLDER_HISTORY_SIZE,
     DEFAULT_LIBRARY_NAME,
     DOMAIN,
     ERROR_AUTH_FAILED,
@@ -55,6 +57,7 @@ class SharePointPhotosConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 site_url=user_input[CONF_SITE_URL],
                 library_name=user_input.get(CONF_LIBRARY_NAME, DEFAULT_LIBRARY_NAME),
                 base_folder_path=user_input.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH),
+                recent_history_size=user_input.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE),
             )
 
             try:
@@ -87,6 +90,10 @@ class SharePointPhotosConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_SITE_URL): str,
                 vol.Optional(CONF_LIBRARY_NAME, default=DEFAULT_LIBRARY_NAME): str,
                 vol.Optional(CONF_BASE_FOLDER_PATH, default=DEFAULT_BASE_FOLDER_PATH): str,
+                vol.Optional(
+                    CONF_FOLDER_HISTORY_SIZE,
+                    default=DEFAULT_FOLDER_HISTORY_SIZE
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=200)),
             }),
             errors=errors,
         )
@@ -131,5 +138,12 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
                         self.config_entry.data.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH)
                     ),
                 ): str,
+                vol.Optional(
+                    CONF_FOLDER_HISTORY_SIZE,
+                    default=self.config_entry.options.get(
+                        CONF_FOLDER_HISTORY_SIZE,
+                        self.config_entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE)
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=200)),
             }),
         )

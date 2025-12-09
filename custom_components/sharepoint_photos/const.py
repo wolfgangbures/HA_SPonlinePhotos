@@ -11,11 +11,13 @@ CONF_SITE_URL = "site_url"
 CONF_LIBRARY_NAME = "library_name"
 CONF_BASE_FOLDER_PATH = "base_folder_path"
 CONF_REFRESH_INTERVAL = "refresh_interval"
+CONF_FOLDER_HISTORY_SIZE = "folder_history_size"
 
 # Default values
 DEFAULT_LIBRARY_NAME = "Freigegebene Dokumente"  # German SharePoint default
 DEFAULT_BASE_FOLDER_PATH = "/General/Fotos"
 DEFAULT_REFRESH_INTERVAL = 6  # hours
+DEFAULT_FOLDER_HISTORY_SIZE = 30
 
 # Microsoft Graph API
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"

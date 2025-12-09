@@ -14,7 +14,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.components.http import HomeAssistantView
 
 from .api import SharePointPhotosApiClient
-from .const import DOMAIN
+from .const import (
+    CONF_BASE_FOLDER_PATH,
+    CONF_FOLDER_HISTORY_SIZE,
+    CONF_LIBRARY_NAME,
+    DEFAULT_BASE_FOLDER_PATH,
+    DEFAULT_FOLDER_HISTORY_SIZE,
+    DEFAULT_LIBRARY_NAME,
+    DOMAIN,
+)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -150,8 +158,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client_id = entry.data.get("client_id")
     client_secret = entry.data.get("client_secret")
     site_url = entry.data.get("site_url")
-    library_name = entry.data.get("library_name", "Documents")
-    base_folder_path = entry.data.get("base_folder_path", "/Photos")
+    library_name = entry.options.get(
+        CONF_LIBRARY_NAME,
+        entry.data.get(CONF_LIBRARY_NAME, DEFAULT_LIBRARY_NAME),
+    )
+    base_folder_path = entry.options.get(
+        CONF_BASE_FOLDER_PATH,
+        entry.data.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH),
+    )
+    recent_history_size = entry.options.get(
+        CONF_FOLDER_HISTORY_SIZE,
+        entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE),
+    )
 
     client = SharePointPhotosApiClient(
         hass=hass,
@@ -161,6 +179,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         site_url=site_url,
         library_name=library_name,
         base_folder_path=base_folder_path,
+        recent_history_size=recent_history_size,
     )
 
     coordinator = SharePointPhotosDataUpdateCoordinator(hass, client=client, entry_id=entry.entry_id)

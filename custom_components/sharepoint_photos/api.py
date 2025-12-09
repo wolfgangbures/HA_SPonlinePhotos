@@ -2,6 +2,7 @@
 
 import logging
 import random
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +17,7 @@ from .const import (
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
     CONF_TENANT_ID,
+    DEFAULT_FOLDER_HISTORY_SIZE,
     GRAPH_API_BASE,
     IMAGE_EXTENSIONS,
     SCOPE,
@@ -36,6 +38,7 @@ class SharePointPhotosApiClient:
         site_url: str,
         library_name: str = "Documents",
         base_folder_path: str = "/Photos",
+        recent_history_size: int = DEFAULT_FOLDER_HISTORY_SIZE,
     ) -> None:
         """Initialize the SharePoint client."""
         self.hass = hass
@@ -45,6 +48,10 @@ class SharePointPhotosApiClient:
         self.site_url = site_url
         self.library_name = library_name
         self.base_folder_path = base_folder_path
+        self._recent_history_size = max(0, recent_history_size or 0)
+        self._recent_folder_paths = (
+            deque(maxlen=self._recent_history_size) if self._recent_history_size > 0 else None
+        )
         
         self._session = async_get_clientsession(hass)
         self._access_token: Optional[str] = None
@@ -81,6 +88,48 @@ class SharePointPhotosApiClient:
                     return "/".join(relative_parts)
 
         return normalized_path.split("/")[-1]
+
+    def _filter_recent_folders(self, folders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filter out recently used folders when enough choices are available."""
+        if not folders or not self._recent_folder_paths:
+            return folders
+
+        recent_paths = set(self._recent_folder_paths)
+        available = [folder for folder in folders if folder.get("path") not in recent_paths]
+
+        if available:
+            filtered_count = len(folders) - len(available)
+            if filtered_count:
+                _LOGGER.debug(
+                    "Excluded %d recently used folders (limit=%d)",
+                    filtered_count,
+                    self._recent_history_size,
+                )
+            return available
+
+        _LOGGER.debug(
+            "All folders are within the recent history window (%d); allowing reuse",
+            self._recent_history_size,
+        )
+        return folders
+
+    def _record_folder_history(self, folder_path: Optional[str]) -> None:
+        """Remember the most recently selected folder to avoid immediate reuse."""
+        if not folder_path or not self._recent_folder_paths:
+            return
+
+        try:
+            self._recent_folder_paths.remove(folder_path)
+        except ValueError:
+            pass
+
+        self._recent_folder_paths.append(folder_path)
+        _LOGGER.debug(
+            "Recent folder history updated (%d/%d): %s",
+            len(self._recent_folder_paths),
+            self._recent_history_size,
+            folder_path,
+        )
 
     async def authenticate(self) -> bool:
         """Authenticate with Microsoft Graph API."""
@@ -470,8 +519,9 @@ class SharePointPhotosApiClient:
         if not folders:
             return None
 
-        # Select a random folder
-        selected_folder = random.choice(folders)
+        # Select a random folder while avoiding recently used ones when possible
+        candidate_folders = self._filter_recent_folders(folders)
+        selected_folder = random.choice(candidate_folders)
         _LOGGER.info("Selected random folder: %s", selected_folder["path"])
         
         # Get photos from the selected folder
@@ -488,6 +538,7 @@ class SharePointPhotosApiClient:
         # Update current folder state
         self._current_folder_path = selected_folder["path"]
         self._current_folder_data = folder_data
+        self._record_folder_history(selected_folder["path"])
         
         return folder_data
 
@@ -535,6 +586,7 @@ class SharePointPhotosApiClient:
             # Update current folder state
             self._current_folder_path = folder_path
             self._current_folder_data = folder_data
+            self._record_folder_history(folder_path)
             _LOGGER.info("Selected specific folder: %s", folder_path)
             
             return folder_data

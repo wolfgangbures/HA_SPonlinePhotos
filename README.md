@@ -13,6 +13,7 @@ This code was generatde by GPT5.1-Codex.
 ✅ **Recursive Folder Scanning** - Discovers all photo folders in your SharePoint hierarchy  
 ✅ **Microsoft Graph API** - Secure authentication using Azure AD  
 ✅ **Real-time Updates** - Background refresh with coordinator pattern  
+✅ **Recent Folder History** - Configurable limit keeps the last N folders out of rotation  
 ✅ **Rich Sensors** - Multiple sensors with photo URLs as attributes  
 ✅ **Services** - Manual refresh and folder selection services  
 ✅ **Configuration UI** - Easy setup through Home Assistant UI  
@@ -74,6 +75,7 @@ Restart Home Assistant to load the new integration.
    - **Site URL**: Full SharePoint site URL (e.g., `https://yourdomain.sharepoint.com/sites/photos`)
    - **Library Name**: Document library name (default: `Documents`)
    - **Base Folder Path**: Path to photo folders (e.g., `/Photos`)
+  - **Recent Folder History Size**: Number of previously selected folders to avoid when refreshing (default: `30`, set to `0` to disable)
 
 ## How It Works
 
