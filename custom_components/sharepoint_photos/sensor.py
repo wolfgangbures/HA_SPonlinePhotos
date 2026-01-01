@@ -164,28 +164,41 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
             photo_urls = [url for url in photo_urls if url]
             
             # Calculate rotating picture URL (changes every 10 seconds)
-            current_picture_url = ""
+            current_picture_url = None
+            current_photo = None
+            preview_urls: List[str] = []
+
             if photo_urls:
                 # Use current time to create a rotating index that changes every 10 seconds
                 import time
+
                 cycle_time = 10  # seconds
                 current_cycle = int(time.time() / cycle_time)
                 picture_index = current_cycle % len(photo_urls)
                 current_picture_url = photo_urls[picture_index]
-            
-            current_photo = None
-            if photos and photo_urls:
-                current_photo = photos[picture_index]
+                if photos and picture_index < len(photos):
+                    current_photo = photos[picture_index]
 
-            return {
-                "photos": photos,
-                "photo_urls": photo_urls,
-                "current_picture_url": current_picture_url,
-                "current_picture_label": current_photo.get("name") if current_photo else None,
+                preview_urls = photo_urls[:5]  # keep attributes compact for recorder
+
+            attributes: Dict[str, Any] = {
                 "folder_path": data.get("folder_path"),
                 "photo_count": len(photos),
                 "rotation_cycle_seconds": 10,
+                "current_picture_url": current_picture_url,
+                "current_picture_label": current_photo.get("name") if current_photo else None,
             }
+
+            if preview_urls:
+                attributes["preview_urls"] = preview_urls
+
+            if current_photo:
+                attributes["current_photo_id"] = current_photo.get("id")
+                attributes["current_photo_name"] = current_photo.get("name")
+                if current_photo.get("web_url"):
+                    attributes["current_photo_web_url"] = current_photo["web_url"]
+
+            return attributes
         
         return {}
 
