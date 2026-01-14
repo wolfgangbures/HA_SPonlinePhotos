@@ -15,11 +15,13 @@ from .const import (
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
     CONF_FOLDER_HISTORY_SIZE,
+    CONF_MIN_PHOTO_COUNT,
     CONF_LIBRARY_NAME,
     CONF_SITE_URL,
     CONF_TENANT_ID,
     DEFAULT_BASE_FOLDER_PATH,
     DEFAULT_FOLDER_HISTORY_SIZE,
+    DEFAULT_MIN_PHOTO_COUNT,
     DEFAULT_LIBRARY_NAME,
     DOMAIN,
     ERROR_AUTH_FAILED,
@@ -58,6 +60,7 @@ class SharePointPhotosConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 library_name=user_input.get(CONF_LIBRARY_NAME, DEFAULT_LIBRARY_NAME),
                 base_folder_path=user_input.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH),
                 recent_history_size=user_input.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE),
+                min_photos_per_folder=user_input.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT),
             )
 
             try:
@@ -94,6 +97,10 @@ class SharePointPhotosConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_FOLDER_HISTORY_SIZE,
                     default=DEFAULT_FOLDER_HISTORY_SIZE
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=200)),
+                vol.Optional(
+                    CONF_MIN_PHOTO_COUNT,
+                    default=DEFAULT_MIN_PHOTO_COUNT
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
             }),
             errors=errors,
         )
@@ -145,5 +152,12 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
                         self.config_entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE)
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=200)),
+                vol.Optional(
+                    CONF_MIN_PHOTO_COUNT,
+                    default=self.config_entry.options.get(
+                        CONF_MIN_PHOTO_COUNT,
+                        self.config_entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT)
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
             }),
         )

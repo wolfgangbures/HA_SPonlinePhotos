@@ -17,9 +17,11 @@ from .api import SharePointPhotosApiClient
 from .const import (
     CONF_BASE_FOLDER_PATH,
     CONF_FOLDER_HISTORY_SIZE,
+    CONF_MIN_PHOTO_COUNT,
     CONF_LIBRARY_NAME,
     DEFAULT_BASE_FOLDER_PATH,
     DEFAULT_FOLDER_HISTORY_SIZE,
+    DEFAULT_MIN_PHOTO_COUNT,
     DEFAULT_LIBRARY_NAME,
     DOMAIN,
 )
@@ -170,6 +172,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CONF_FOLDER_HISTORY_SIZE,
         entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE),
     )
+    min_photos_per_folder = entry.options.get(
+        CONF_MIN_PHOTO_COUNT,
+        entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT),
+    )
 
     client = SharePointPhotosApiClient(
         hass=hass,
@@ -180,6 +186,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         library_name=library_name,
         base_folder_path=base_folder_path,
         recent_history_size=recent_history_size,
+        min_photos_per_folder=min_photos_per_folder,
     )
 
     coordinator = SharePointPhotosDataUpdateCoordinator(hass, client=client, entry_id=entry.entry_id)

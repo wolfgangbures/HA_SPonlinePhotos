@@ -14,6 +14,7 @@ This code was generatde by GPT5.1-Codex.
 ✅ **Microsoft Graph API** - Secure authentication using Azure AD  
 ✅ **Real-time Updates** - Background refresh with coordinator pattern  
 ✅ **Recent Folder History** - Configurable limit keeps the last N folders out of rotation  
+✅ **Folder Quality Filter** - Enforce a minimum number of photos before a folder enters the rotation  
 ✅ **Rich Sensors** - Multiple sensors with photo URLs as attributes  
 ✅ **Services** - Manual refresh and folder selection services  
 ✅ **Configuration UI** - Easy setup through Home Assistant UI  
@@ -76,6 +77,7 @@ Restart Home Assistant to load the new integration.
    - **Library Name**: Document library name (default: `Documents`)
    - **Base Folder Path**: Path to photo folders (e.g., `/Photos`)
   - **Recent Folder History Size**: Number of previously selected folders to avoid when refreshing (default: `30`, set to `0` to disable)
+    - **Minimum Photos Per Folder**: Only include folders that contain at least this many photos (default: `5`)
 
 ## How It Works
 

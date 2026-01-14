@@ -18,6 +18,7 @@ from .const import (
     CONF_CLIENT_SECRET,
     CONF_TENANT_ID,
     DEFAULT_FOLDER_HISTORY_SIZE,
+    DEFAULT_MIN_PHOTO_COUNT,
     GRAPH_API_BASE,
     IMAGE_EXTENSIONS,
     SCOPE,
@@ -39,6 +40,7 @@ class SharePointPhotosApiClient:
         library_name: str = "Documents",
         base_folder_path: str = "/Photos",
         recent_history_size: int = DEFAULT_FOLDER_HISTORY_SIZE,
+        min_photos_per_folder: int = DEFAULT_MIN_PHOTO_COUNT,
     ) -> None:
         """Initialize the SharePoint client."""
         self.hass = hass
@@ -49,6 +51,7 @@ class SharePointPhotosApiClient:
         self.library_name = library_name
         self.base_folder_path = base_folder_path
         self._recent_history_size = max(0, recent_history_size or 0)
+        self._min_photos_per_folder = max(1, min_photos_per_folder or DEFAULT_MIN_PHOTO_COUNT)
         self._recent_folder_paths = (
             deque(maxlen=self._recent_history_size) if self._recent_history_size > 0 else None
         )
@@ -401,8 +404,8 @@ class SharePointPhotosApiClient:
 
             status, data = await self._make_authenticated_request(url)
             if status == 200:
-                # Check if current folder has photos
-                has_photos = False
+                # Count how many photos exist in this folder
+                photo_count = 0
                 subfolders = []
                 
                 items = data.get("value", [])
@@ -416,16 +419,28 @@ class SharePointPhotosApiClient:
                         # It's a file, check if it's an image
                         file_name = item.get("name", "").lower()
                         if any(file_name.endswith(ext) for ext in IMAGE_EXTENSIONS):
-                            has_photos = True
+                            photo_count += 1
 
-                # If current folder has photos, add it to the list
-                if has_photos:
+                # If current folder meets the minimum threshold, add it to the list
+                if photo_count >= self._min_photos_per_folder:
                     folders.append({
                         "name": self._build_display_folder_name(folder_path),
                         "path": folder_path,
                         "full_path": folder_path,
+                        "photo_count": photo_count,
                     })
-                    _LOGGER.debug("Added photo folder: %s", folder_path)
+                    _LOGGER.debug(
+                        "Added photo folder: %s (%d photos)",
+                        folder_path,
+                        photo_count,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Skipping folder %s: only %d photos (minimum %d)",
+                        folder_path,
+                        photo_count,
+                        self._min_photos_per_folder,
+                    )
 
                 # Recursively scan subfolders
                 _LOGGER.debug("Scanning %d subfolders in %s", len(subfolders), folder_path)
@@ -517,12 +532,23 @@ class SharePointPhotosApiClient:
         """Get a random photo folder with its images - this always selects a NEW folder."""
         folders = await self.get_photo_folders()
         if not folders:
+            _LOGGER.warning(
+                "No folders meet the minimum photo requirement (%d)",
+                self._min_photos_per_folder,
+            )
             return None
 
         # Select a random folder while avoiding recently used ones when possible
         candidate_folders = self._filter_recent_folders(folders)
+        if not candidate_folders:
+            _LOGGER.warning("No folders available after recent-history filtering")
+            return None
         selected_folder = random.choice(candidate_folders)
-        _LOGGER.info("Selected random folder: %s", selected_folder["path"])
+        _LOGGER.info(
+            "Selected random folder: %s (%d photos)",
+            selected_folder["path"],
+            selected_folder.get("photo_count", -1),
+        )
         
         # Get photos from the selected folder
         photos = await self.get_folder_photos(selected_folder["path"])

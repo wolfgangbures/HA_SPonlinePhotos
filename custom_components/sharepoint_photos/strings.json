@@ -11,7 +11,8 @@
           "site_url": "SharePoint Site URL",
           "library_name": "Document Library Name",
           "base_folder_path": "Base Folder Path",
-          "folder_history_size": "Recent Folder History Size"
+          "folder_history_size": "Recent Folder History Size",
+          "min_photo_count": "Minimum Photos Per Folder"
         },
         "data_description": {
           "tenant_id": "Your Azure Active Directory tenant ID (GUID)",
@@ -20,7 +21,8 @@
           "site_url": "Full URL to your SharePoint site (e.g., https://yourdomain.sharepoint.com/sites/photos)",
           "library_name": "Name of the document library containing your photos. Common values: 'Documents' (English), 'Freigegebene Dokumente' (German), 'Shared Documents'",
           "base_folder_path": "Path to the folder containing your photo folders (e.g., /Photos, /General/Fotos)",
-          "folder_history_size": "Number of recently used folders to exclude when picking a new random folder (set to 0 to disable)"
+          "folder_history_size": "Number of recently used folders to exclude when picking a new random folder (set to 0 to disable)",
+          "min_photo_count": "Only include folders that contain at least this many photos (default 5)"
         }
       }
     },
@@ -45,7 +47,8 @@
         "data": {
           "library_name": "Document Library Name",
           "base_folder_path": "Base Folder Path",
-          "folder_history_size": "Recent Folder History Size"
+          "folder_history_size": "Recent Folder History Size",
+          "min_photo_count": "Minimum Photos Per Folder"
         }
       }
     }
