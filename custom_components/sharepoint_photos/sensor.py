@@ -198,6 +198,10 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
                 if current_photo.get("web_url"):
                     attributes["current_photo_web_url"] = current_photo["web_url"]
 
+            recent_folders = data.get("recent_folders")
+            if recent_folders:
+                attributes["recent_folders"] = recent_folders
+
             return attributes
         
         return {}

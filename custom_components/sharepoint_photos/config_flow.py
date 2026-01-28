@@ -119,7 +119,7 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize SharePoint Photos options flow."""
-        self.config_entry = config_entry
+        self._config_entry = config_entry
 
     async def async_step_init(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -133,30 +133,30 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({
                 vol.Optional(
                     CONF_LIBRARY_NAME,
-                    default=self.config_entry.options.get(
+                    default=self._config_entry.options.get(
                         CONF_LIBRARY_NAME, 
-                        self.config_entry.data.get(CONF_LIBRARY_NAME, DEFAULT_LIBRARY_NAME)
+                        self._config_entry.data.get(CONF_LIBRARY_NAME, DEFAULT_LIBRARY_NAME)
                     ),
                 ): str,
                 vol.Optional(
                     CONF_BASE_FOLDER_PATH,
-                    default=self.config_entry.options.get(
+                    default=self._config_entry.options.get(
                         CONF_BASE_FOLDER_PATH,
-                        self.config_entry.data.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH)
+                        self._config_entry.data.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH)
                     ),
                 ): str,
                 vol.Optional(
                     CONF_FOLDER_HISTORY_SIZE,
-                    default=self.config_entry.options.get(
+                    default=self._config_entry.options.get(
                         CONF_FOLDER_HISTORY_SIZE,
-                        self.config_entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE)
+                        self._config_entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE)
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=200)),
                 vol.Optional(
                     CONF_MIN_PHOTO_COUNT,
-                    default=self.config_entry.options.get(
+                    default=self._config_entry.options.get(
                         CONF_MIN_PHOTO_COUNT,
-                        self.config_entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT)
+                        self._config_entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT)
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
             }),

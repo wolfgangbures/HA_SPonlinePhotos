@@ -134,6 +134,33 @@ class SharePointPhotosApiClient:
             folder_path,
         )
 
+    def _get_recent_folder_history(self) -> List[Dict[str, Any]]:
+        """Expose the recent-folder queue in a human-friendly format."""
+        if not self._recent_folder_paths:
+            return []
+
+        # Deque keeps oldest items on the left; reverse so rank 1 is most recent.
+        ordered_paths = list(reversed(self._recent_folder_paths))
+        return [
+            {
+                "path": path,
+                "name": self._build_display_folder_name(path),
+                "recency_rank": index + 1,
+            }
+            for index, path in enumerate(ordered_paths)
+        ]
+
+    def _build_folder_payload(self, folder_path: str, photos: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Create the coordinator payload that sensors consume."""
+        return {
+            "folder_name": self._build_display_folder_name(folder_path),
+            "folder_path": folder_path,
+            "photos": photos,
+            "photo_count": len(photos),
+            "last_updated": dt_util.utcnow().isoformat(),
+            "recent_folders": self._get_recent_folder_history(),
+        }
+
     async def authenticate(self) -> bool:
         """Authenticate with Microsoft Graph API."""
         try:
@@ -553,18 +580,13 @@ class SharePointPhotosApiClient:
         # Get photos from the selected folder
         photos = await self.get_folder_photos(selected_folder["path"])
         
-        folder_data = {
-            "folder_name": self._build_display_folder_name(selected_folder["path"]),
-            "folder_path": selected_folder["path"],
-            "photos": photos,
-            "photo_count": len(photos),
-            "last_updated": dt_util.utcnow().isoformat(),
-        }
+        # Update history first so payload reflects the newly selected folder
+        self._record_folder_history(selected_folder["path"])
+        folder_data = self._build_folder_payload(selected_folder["path"], photos)
         
         # Update current folder state
         self._current_folder_path = selected_folder["path"]
         self._current_folder_data = folder_data
-        self._record_folder_history(selected_folder["path"])
         
         return folder_data
 
@@ -576,13 +598,7 @@ class SharePointPhotosApiClient:
             try:
                 photos = await self.get_folder_photos(self._current_folder_path)
                 
-                folder_data = {
-                    "folder_name": self._build_display_folder_name(self._current_folder_path),
-                    "folder_path": self._current_folder_path,
-                    "photos": photos,
-                    "photo_count": len(photos),
-                    "last_updated": dt_util.utcnow().isoformat(),
-                }
+                folder_data = self._build_folder_payload(self._current_folder_path, photos)
                 
                 # Update cached data
                 self._current_folder_data = folder_data
@@ -601,18 +617,12 @@ class SharePointPhotosApiClient:
         try:
             photos = await self.get_folder_photos(folder_path)
             
-            folder_data = {
-                "folder_name": self._build_display_folder_name(folder_path),
-                "folder_path": folder_path,
-                "photos": photos,
-                "photo_count": len(photos),
-                "last_updated": dt_util.utcnow().isoformat(),
-            }
+            self._record_folder_history(folder_path)
+            folder_data = self._build_folder_payload(folder_path, photos)
             
             # Update current folder state
             self._current_folder_path = folder_path
             self._current_folder_data = folder_data
-            self._record_folder_history(folder_path)
             _LOGGER.info("Selected specific folder: %s", folder_path)
             
             return folder_data
