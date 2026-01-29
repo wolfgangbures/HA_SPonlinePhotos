@@ -308,8 +308,15 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""
-    if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+    try:
+        unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    except ValueError:
+        # Platform never finished loading (e.g., setup failed); treat as unloaded.
+        _LOGGER.debug("Platform %s was never loaded; skipping unload", PLATFORMS)
+        unloaded = True
+
+    if unloaded:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
 
     return unloaded
 
