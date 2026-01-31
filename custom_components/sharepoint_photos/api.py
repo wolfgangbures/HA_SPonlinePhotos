@@ -485,20 +485,21 @@ class SharePointPhotosApiClient:
             import traceback
             _LOGGER.error("Traceback: %s", traceback.format_exc())
 
+
     async def get_folder_photos(self, folder_path: str) -> List[Dict[str, Any]]:
-        """Get all photos from a specific folder."""
+        """Get all photos from a specific folder, filtering out broken image URLs."""
         drive_id = await self._get_drive_id()
         if not drive_id:
             return []
 
         try:
             headers = await self._get_headers()
-            # Add expand parameter to get thumbnails
             url = f"{GRAPH_API_BASE}/drives/{drive_id}/root:{folder_path}:/children?$expand=thumbnails"
 
             photos = []
             status, data = await self._make_authenticated_request(url)
             if status == 200:
+                session = self._session
                 for item in data.get("value", []):
                     if item.get("file"):
                         file_name = item.get("name", "").lower()
@@ -507,7 +508,6 @@ class SharePointPhotosApiClient:
                             thumbnail_url = None
                             thumbnails = item.get("thumbnails", [])
                             if thumbnails:
-                                # Get the largest available thumbnail
                                 for thumbnail_set in thumbnails:
                                     if "large" in thumbnail_set:
                                         thumbnail_url = thumbnail_set["large"].get("url")
@@ -518,37 +518,40 @@ class SharePointPhotosApiClient:
                                     elif "small" in thumbnail_set:
                                         thumbnail_url = thumbnail_set["small"].get("url")
                                         break
-                            
-                            # Fallback URLs
+
                             download_url = item.get("@microsoft.graph.downloadUrl")
                             web_url = item.get("webUrl")
-                            
+
                             if download_url:
-                                # Create proxy URL for better browser compatibility
-                                # We'll use the photo index as the image ID
-                                photo_index = len(photos)
-                                
-                                # Prioritize thumbnail over download URL for shorter URLs
-                                display_url = thumbnail_url if thumbnail_url else download_url
-                                
-                                photos.append({
-                                    "name": item["name"],
-                                    "url": display_url,  # Use thumbnail primarily, download as fallback
-                                    "proxy_url": f"/api/sharepoint_photos/image/{{entry_id}}/{photo_index}",  # Placeholder for entry_id
-                                    "thumbnail_url": thumbnail_url,
-                                    "download_url": download_url,
-                                    "web_url": web_url,
-                                    "size": item.get("size", 0),
-                                    "modified": item.get("lastModifiedDateTime"),
-                                    "index": photo_index,
-                                })
-                                _LOGGER.debug("Added photo: %s (using %s)", 
-                                              item["name"], 
-                                              "thumbnail" if thumbnail_url else "download URL")
+                                # Validate the download_url (HEAD request)
+                                try:
+                                    async with session.head(download_url, timeout=10) as resp:
+                                        valid = resp.status == 200 and resp.headers.get("content-type", "").startswith("image/")
+                                except Exception as e:
+                                    _LOGGER.warning("HEAD request failed for %s: %s", download_url, str(e))
+                                    valid = False
+
+                                if valid:
+                                    photo_index = len(photos)
+                                    display_url = thumbnail_url if thumbnail_url else download_url
+                                    photos.append({
+                                        "name": item["name"],
+                                        "url": display_url,
+                                        "proxy_url": f"/api/sharepoint_photos/image/{{entry_id}}/{photo_index}",
+                                        "thumbnail_url": thumbnail_url,
+                                        "download_url": download_url,
+                                        "web_url": web_url,
+                                        "size": item.get("size", 0),
+                                        "modified": item.get("lastModifiedDateTime"),
+                                        "index": photo_index,
+                                    })
+                                    _LOGGER.debug("Added photo: %s (using %s)", item["name"], "thumbnail" if thumbnail_url else "download URL")
+                                else:
+                                    _LOGGER.warning("Skipping photo with invalid download URL: %s", download_url)
                             else:
                                 _LOGGER.warning("No download URL found for photo: %s", item["name"])
 
-            _LOGGER.debug("Found %d photos in folder %s", len(photos), folder_path)
+            _LOGGER.debug("Found %d valid photos in folder %s", len(photos), folder_path)
             return photos
 
         except Exception as e:
