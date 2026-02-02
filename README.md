@@ -1,7 +1,7 @@
 # SharePoint Photos Integration for Home Assistant
 
 <p align="center">
-  <img src="custom_components/sharepoint_photos/icon.svg" alt="SharePoint Photos icon" width="160">
+  <img src="logo.png" alt="SharePoint Photos logo" width="160">
 </p>
 
 A complete Home Assistant custom integration that displays random photos from your SharePoint folders.
@@ -21,7 +21,7 @@ This code was generatde by GPT5.1-Codex.
 
 ### Icon & Branding
 
-The repository now includes a custom SVG icon (`custom_components/sharepoint_photos/icon.svg`) that blends SharePoint-inspired blues with a camera frame/mountain motif. Feel free to reuse it for dashboards, HACS tiles, or documentation previews.
+The repository includes a custom logo (`logo.png`) for documentation previews, HACS tiles, or dashboards. The integration icon for Home Assistant remains at `custom_components/sharepoint_photos/icon.svg`.
 
 ## Installation
 
