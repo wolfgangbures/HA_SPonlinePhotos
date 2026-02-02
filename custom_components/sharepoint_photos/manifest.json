@@ -8,9 +8,10 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/wolfgangbures/sharepoint-photos-ha/issues",
+  "icon": "mdi:folder-image",
   "requirements": [
     "aiohttp>=3.8.0",
     "msal>=1.20.0"
   ],
-  "version": "1.1.1"
+  "version": "1.1.2"
 }
