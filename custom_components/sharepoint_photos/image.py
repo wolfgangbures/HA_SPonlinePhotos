@@ -36,6 +36,10 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
         CoordinatorEntity.__init__(self, coordinator)
         ImageEntity.__init__(self, coordinator.hass)
+        if not hasattr(self, "access_tokens"):
+            self.access_tokens = []
+        if not self.access_tokens:
+            self.async_update_token()
         self._config_entry = config_entry
         site_name = config_entry.data.get("site_url", "").replace("https://", "").replace("/", "_")
         self._attr_unique_id = f"{DOMAIN}_{site_name}_current_image"
