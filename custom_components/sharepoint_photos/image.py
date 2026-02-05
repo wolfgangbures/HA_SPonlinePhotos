@@ -34,7 +34,8 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
     _attr_name = "SharePoint Photos Current Picture"
 
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
+        CoordinatorEntity.__init__(self, coordinator)
+        ImageEntity.__init__(self, coordinator.hass)
         self._config_entry = config_entry
         site_name = config_entry.data.get("site_url", "").replace("https://", "").replace("/", "_")
         self._attr_unique_id = f"{DOMAIN}_{site_name}_current_image"
