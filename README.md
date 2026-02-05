@@ -142,6 +142,12 @@ The integration creates these sensors:
   - `cycle_time_seconds`: 10 (rotation interval)
   - `folder_name`: Current folder name
 
+## Image Entity Created
+
+### `image.sharepoint_photos_current_picture`
+- **Image**: Current photo rendered as an image entity (updates every 10 seconds)
+- **Recommended for**: `media-entity-image://` URLs and wallpanel displays
+
 ## Services
 
 ### `sharepoint_photos.refresh_photos`
@@ -173,7 +179,7 @@ entity: sensor.sharepoint_photos_current_picture_url
 ```yaml
 # Using media-entity-image protocol for wallpanel/custom cards
 type: picture
-image: "media-entity-image://sensor.sharepoint_photos_current_picture_url"
+image: "media-entity-image://image.sharepoint_photos_current_picture"
 title: "{{ states('sensor.sharepoint_photos_current_photo_folder') }}"
 ```
 

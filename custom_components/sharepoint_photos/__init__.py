@@ -26,7 +26,7 @@ from .const import (
     DOMAIN,
 )
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.IMAGE]
 
 _LOGGER = logging.getLogger(__name__)
 

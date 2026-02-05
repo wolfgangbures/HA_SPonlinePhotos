@@ -1,0 +1,5 @@
+# Local Home Assistant logs
+homeassistant.log
+
+# Generic logs
+*.log
