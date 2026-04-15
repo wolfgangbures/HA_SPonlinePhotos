@@ -45,10 +45,14 @@
         "title": "SharePoint Photos Options",
         "description": "Configure additional options for SharePoint Photos.",
         "data": {
+          "client_secret": "Client Secret",
           "library_name": "Document Library Name",
           "base_folder_path": "Base Folder Path",
           "folder_history_size": "Recent Folder History Size",
           "min_photo_count": "Minimum Photos Per Folder"
+        },
+        "data_description": {
+          "client_secret": "Update your client secret if it has expired or been regenerated in Azure AD"
         }
       }
     }

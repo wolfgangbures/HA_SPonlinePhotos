@@ -18,3 +18,10 @@ select_folder:
       required: true
       selector:
         text:
+
+refresh_token:
+  name: Refresh authentication token
+  description: Refresh the SharePoint authentication token (use if token has expired)
+  target:
+    entity:
+      integration: sharepoint_photos

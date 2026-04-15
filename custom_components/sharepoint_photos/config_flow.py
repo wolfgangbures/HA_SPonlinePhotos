@@ -125,12 +125,59 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> FlowResult:
         """Manage the options."""
+        errors = {}
+        
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            # If client_secret was updated, test the connection
+            if user_input.get(CONF_CLIENT_SECRET):
+                client = SharePointPhotosApiClient(
+                    hass=self.hass,
+                    tenant_id=self._config_entry.data.get(CONF_TENANT_ID),
+                    client_id=self._config_entry.data.get(CONF_CLIENT_ID),
+                    client_secret=user_input.get(CONF_CLIENT_SECRET),
+                    site_url=self._config_entry.data.get(CONF_SITE_URL),
+                    library_name=user_input.get(
+                        CONF_LIBRARY_NAME,
+                        self._config_entry.data.get(CONF_LIBRARY_NAME, DEFAULT_LIBRARY_NAME),
+                    ),
+                    base_folder_path=user_input.get(
+                        CONF_BASE_FOLDER_PATH,
+                        self._config_entry.data.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH),
+                    ),
+                    recent_history_size=user_input.get(
+                        CONF_FOLDER_HISTORY_SIZE,
+                        self._config_entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE),
+                    ),
+                    min_photos_per_folder=user_input.get(
+                        CONF_MIN_PHOTO_COUNT,
+                        self._config_entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT),
+                    ),
+                )
+                
+                try:
+                    if not await client.test_connection():
+                        errors["base"] = ERROR_AUTH_FAILED
+                except Exception as e:
+                    _LOGGER.error("Error testing connection with updated secret: %s", str(e))
+                    errors["base"] = ERROR_AUTH_FAILED
+            
+            if not errors:
+                # Update the config entry data with the new secret if provided
+                if user_input.get(CONF_CLIENT_SECRET):
+                    self._config_entry.data = {**self._config_entry.data, CONF_CLIENT_SECRET: user_input[CONF_CLIENT_SECRET]}
+                
+                return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
+                vol.Optional(
+                    CONF_CLIENT_SECRET,
+                    default=self._config_entry.options.get(
+                        CONF_CLIENT_SECRET,
+                        "",
+                    ),
+                ): str,
                 vol.Optional(
                     CONF_LIBRARY_NAME,
                     default=self._config_entry.options.get(
@@ -160,4 +207,5 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
             }),
+            errors=errors,
         )

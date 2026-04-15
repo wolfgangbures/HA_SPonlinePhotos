@@ -158,7 +158,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     tenant_id = entry.data.get("tenant_id")
     client_id = entry.data.get("client_id")
-    client_secret = entry.data.get("client_secret")
+    # Use client_secret from options if updated, otherwise fall back to initial config
+    client_secret = entry.options.get("client_secret") or entry.data.get("client_secret")
     site_url = entry.data.get("site_url")
     library_name = entry.options.get(
         CONF_LIBRARY_NAME,
