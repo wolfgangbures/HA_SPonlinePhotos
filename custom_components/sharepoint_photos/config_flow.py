@@ -128,13 +128,17 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
         errors = {}
         
         if user_input is not None:
-            # If client_secret was updated, test the connection
-            if user_input.get(CONF_CLIENT_SECRET):
+            new_options = dict(user_input)
+            provided_secret = (user_input.get(CONF_CLIENT_SECRET) or "").strip()
+
+            # Validate only authentication when a new client secret is provided.
+            # Library/folder settings can fail for reasons unrelated to auth.
+            if provided_secret:
                 client = SharePointPhotosApiClient(
                     hass=self.hass,
                     tenant_id=self._config_entry.data.get(CONF_TENANT_ID),
                     client_id=self._config_entry.data.get(CONF_CLIENT_ID),
-                    client_secret=user_input.get(CONF_CLIENT_SECRET),
+                    client_secret=provided_secret,
                     site_url=self._config_entry.data.get(CONF_SITE_URL),
                     library_name=user_input.get(
                         CONF_LIBRARY_NAME,
@@ -155,18 +159,24 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
                 )
                 
                 try:
-                    if not await client.test_connection():
+                    if not await client.authenticate():
                         errors["base"] = ERROR_AUTH_FAILED
                 except Exception as e:
                     _LOGGER.error("Error testing connection with updated secret: %s", str(e))
                     errors["base"] = ERROR_AUTH_FAILED
             
             if not errors:
-                # Update the config entry data with the new secret if provided
-                if user_input.get(CONF_CLIENT_SECRET):
-                    self._config_entry.data = {**self._config_entry.data, CONF_CLIENT_SECRET: user_input[CONF_CLIENT_SECRET]}
-                
-                return self.async_create_entry(title="", data=user_input)
+                # Persist updated secret in options, or preserve previously stored value.
+                if provided_secret:
+                    new_options[CONF_CLIENT_SECRET] = provided_secret
+                else:
+                    existing_secret = self._config_entry.options.get(CONF_CLIENT_SECRET)
+                    if existing_secret:
+                        new_options[CONF_CLIENT_SECRET] = existing_secret
+                    else:
+                        new_options.pop(CONF_CLIENT_SECRET, None)
+
+                return self.async_create_entry(title="", data=new_options)
 
         return self.async_show_form(
             step_id="init",

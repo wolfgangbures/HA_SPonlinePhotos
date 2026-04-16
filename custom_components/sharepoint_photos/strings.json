@@ -40,6 +40,9 @@
     }
   },
   "options": {
+    "error": {
+      "authentication_failed": "Authentication failed. Please check your client secret."
+    },
     "step": {
       "init": {
         "title": "SharePoint Photos Options",
