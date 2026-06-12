@@ -9,7 +9,6 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import HomeAssistantView
 
@@ -191,12 +190,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     coordinator = SharePointPhotosDataUpdateCoordinator(hass, client=client, entry_id=entry.entry_id)
-    await coordinator.async_config_entry_first_refresh()
 
-    if not coordinator.last_update_success:
-        raise ConfigEntryNotReady
-
+    # Set empty placeholder data so entities are available immediately,
+    # then schedule the actual folder scan as a background task.
+    coordinator.async_set_updated_data({})
     hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    async def _deferred_first_refresh(_=None):
+        """Run the first full folder scan after startup completes."""
+        _LOGGER.info("Starting deferred first refresh for SharePoint Photos")
+        await coordinator.async_request_refresh()
+
+    hass.async_create_task(_deferred_first_refresh())
 
     # Register the image proxy view (only if not already registered)
     if not hasattr(hass.http, '_sharepoint_photos_proxy_registered'):
