@@ -1,6 +1,7 @@
 """Image platform for SharePoint Photos integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -42,6 +43,8 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
             self.async_update_token()
         self._last_content: bytes | None = None
         self._last_content_type: str | None = None
+        self._last_photo_name: str | None = None
+        self._fetch_lock = asyncio.Lock()
         self._config_entry = config_entry
         site_name = config_entry.data.get("site_url", "").replace("https://", "").replace("/", "_")
         self._attr_unique_id = f"{DOMAIN}_{site_name}_current_image"
@@ -69,44 +72,77 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
         """Return bytes of image."""
         photo = self._get_current_photo()
         if not photo:
-            return None
+            # No photo in coordinator data yet – return stale cache if available.
+            return self._last_content
 
         download_url = photo.get("download_url")
         if not download_url:
-            return None
+            return self._last_content
 
-        api_client = self.coordinator._api_client
-        content, content_type, status_code = await api_client.fetch_image_content(download_url)
+        photo_name = photo.get("name")
 
-        if status_code in (401, 403):
-            _LOGGER.info("Image URL expired (status=%s), refreshing coordinator data", status_code)
-            await self.coordinator.async_request_refresh()
+        # If this is the exact same photo we already have in cache, skip the
+        # network round-trip and return immediately.  HA's image proxy calls
+        # async_image() on every token request, so this avoids re-downloading
+        # the same multi-MB file within the same 10-second rotation slot.
+        if photo_name and photo_name == self._last_photo_name and self._last_content:
+            return self._last_content
+
+        # If a fetch is already in flight (e.g., a concurrent proxy request),
+        # serve the stale cache instead of spawning a second download.
+        if self._fetch_lock.locked():
+            _LOGGER.debug("Fetch already in progress, returning stale cache")
+            return self._last_content
+
+        async with self._fetch_lock:
+            # Re-read after acquiring the lock; state may have changed while waiting.
             photo = self._get_current_photo()
             if not photo:
                 return self._last_content
             download_url = photo.get("download_url")
             if not download_url:
                 return self._last_content
+            photo_name = photo.get("name")
+
+            # Second-check: another coroutine may have fetched this photo already.
+            if photo_name and photo_name == self._last_photo_name and self._last_content:
+                return self._last_content
+
+            api_client = self.coordinator._api_client
             content, content_type, status_code = await api_client.fetch_image_content(download_url)
 
-        if status_code == 200 and content:
-            if content_type:
-                self._attr_content_type = content_type
-            self._last_content = content
-            self._last_content_type = self._attr_content_type
-            return content
+            if status_code in (401, 403):
+                _LOGGER.info("Image URL expired (status=%s), refreshing coordinator data", status_code)
+                await self.coordinator.async_request_refresh()
+                photo = self._get_current_photo()
+                if not photo:
+                    return self._last_content
+                download_url = photo.get("download_url")
+                if not download_url:
+                    return self._last_content
+                photo_name = photo.get("name")
+                content, content_type, status_code = await api_client.fetch_image_content(download_url)
 
-        if self._last_content:
-            if self._last_content_type:
-                self._attr_content_type = self._last_content_type
-            _LOGGER.debug(
-                "Returning cached image after fetch failed (status=%s)",
-                status_code,
-            )
-            return self._last_content
+            if status_code == 200 and content:
+                if content_type:
+                    self._attr_content_type = content_type
+                self._last_content = content
+                self._last_content_type = self._attr_content_type
+                self._last_photo_name = photo_name
+                return content
 
-        _LOGGER.debug("Failed to fetch image content (status=%s)", status_code)
-        return None
+            # Fetch failed – serve stale cache so WallPanel never sees a blank.
+            if self._last_content:
+                if self._last_content_type:
+                    self._attr_content_type = self._last_content_type
+                _LOGGER.debug(
+                    "Returning cached image after fetch failed (status=%s)",
+                    status_code,
+                )
+                return self._last_content
+
+            _LOGGER.debug("Failed to fetch image content (status=%s)", status_code)
+            return None
 
     @property
     def available(self) -> bool:

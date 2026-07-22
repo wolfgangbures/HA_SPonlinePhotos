@@ -21,7 +21,7 @@ This code was generatde by GPT5.1-Codex.
 
 ### Icon & Branding
 
-The repository includes a custom logo (`logo.png`) for documentation previews, HACS tiles, or dashboards. The integration icon for Home Assistant remains at `custom_components/sharepoint_photos/icon.svg`.
+The repository includes a custom logo (`logo.png`) for documentation previews, HACS tiles, or dashboards. Home Assistant integration branding is provided via `custom_components/sharepoint_photos/brand/icon.png` and `custom_components/sharepoint_photos/brand/logo.png`. HACS metadata points to the repository root `icon.png`.
 
 ## Installation
 
