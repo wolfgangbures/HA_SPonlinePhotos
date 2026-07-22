@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import timedelta
 from typing import Any
@@ -40,13 +41,46 @@ class SharePointImageProxyView(HomeAssistantView):
     def __init__(self, hass: HomeAssistant):
         """Initialize the proxy view."""
         self.hass = hass
+        # Cache last successful image bytes per entry/image key so transient
+        # SharePoint URL expiry does not surface as broken media in dashboards.
+        self._last_success: dict[str, dict[str, Any]] = {}
 
-    async def get(self, request, entry_id: str, image_id: str):
-        """Proxy SharePoint image requests."""
+    @staticmethod
+    def _cache_key(entry_id: str, image_id: str) -> str:
+        """Build the in-memory cache key for a proxied image."""
+        return f"{entry_id}:{image_id}"
+
+    @staticmethod
+    def _normalize_content_type(content_type: str | None) -> str:
+        """Return a browser-safe image content type."""
+        if content_type and content_type.lower().startswith("image/"):
+            return content_type
+        return "image/jpeg"
+
+    def _build_image_response(self, content: bytes, content_type: str, etag: str, include_body: bool = True):
+        """Create a consistent HTTP response for image consumers."""
         from aiohttp import web
-        import aiohttp
+
+        headers = {
+            "Cache-Control": "public, max-age=30, must-revalidate",
+            "Content-Length": str(len(content)),
+            "ETag": etag,
+            "Access-Control-Allow-Origin": "*",
+            "Content-Disposition": "inline",
+        }
+
+        if include_body:
+            return web.Response(body=content, content_type=content_type, headers=headers)
+        return web.Response(status=200, content_type=content_type, headers=headers)
+
+    async def _proxy_image(self, entry_id: str, image_id: str, include_body: bool = True):
+        """Fetch and proxy a SharePoint image with stale-cache fallback."""
+        from aiohttp import web
+
         
         _LOGGER.debug("Proxy request received: entry_id=%s, image_id=%s", entry_id, image_id)
+        cache_key = self._cache_key(entry_id, image_id)
+        stale = self._last_success.get(cache_key)
         
         try:
             # Get the coordinator for this entry
@@ -65,9 +99,18 @@ class SharePointImageProxyView(HomeAssistantView):
             try:
                 photo_index = int(image_id)
                 photos = data["photos"]
-                if photo_index < 0 or photo_index >= len(photos):
-                    _LOGGER.error("Photo index %d out of range (0-%d)", photo_index, len(photos)-1)
-                    return web.Response(status=404, text="Photo not found")
+                if photo_index < 0:
+                    _LOGGER.error("Negative photo index %d", photo_index)
+                    return web.Response(status=400, text="Invalid photo ID")
+                if photo_index >= len(photos):
+                    original_index = photo_index
+                    photo_index = photo_index % len(photos)
+                    _LOGGER.debug(
+                        "Photo index %d out of range for %d photos, remapped to %d",
+                        original_index,
+                        len(photos),
+                        photo_index,
+                    )
                 
                 photo = photos[photo_index]
                 download_url = photo.get("download_url")
@@ -87,9 +130,9 @@ class SharePointImageProxyView(HomeAssistantView):
             
             content, content_type, status_code = await api_client.fetch_image_content(download_url)
             
-            if status_code == 401:
+            if status_code in (401, 403):
                 # Token expired, try to refresh the data and get new URLs
-                _LOGGER.info("Image URL expired, refreshing photo data...")
+                _LOGGER.info("Image URL expired (status=%d), refreshing photo data...", status_code)
                 await coordinator.async_request_refresh()
                 
                 # Get updated data
@@ -130,24 +173,54 @@ class SharePointImageProxyView(HomeAssistantView):
                     _LOGGER.error("No photo data available after refresh")
                 
             if status_code == 200 and content:
-                _LOGGER.debug("Successfully proxied image: %d bytes, type: %s", len(content), content_type)
-                
-                return web.Response(
-                    body=content,
-                    content_type=content_type,
-                    headers={
-                        'Cache-Control': 'public, max-age=3600',  # Cache for 1 hour
-                        'Content-Length': str(len(content)),
-                        'Access-Control-Allow-Origin': '*',  # Allow CORS
-                    }
+                normalized_content_type = self._normalize_content_type(content_type)
+                etag = hashlib.md5(content).hexdigest()  # nosec - weak hash is fine for cache validation
+                self._last_success[cache_key] = {
+                    "content": content,
+                    "content_type": normalized_content_type,
+                    "etag": etag,
+                }
+                _LOGGER.debug("Successfully proxied image: %d bytes, type: %s", len(content), normalized_content_type)
+                return self._build_image_response(content, normalized_content_type, etag, include_body=include_body)
+
+            if stale:
+                _LOGGER.warning(
+                    "Returning stale cached image after fetch failed: HTTP %d",
+                    status_code,
                 )
+                response = self._build_image_response(
+                    stale["content"],
+                    stale["content_type"],
+                    stale["etag"],
+                    include_body=include_body,
+                )
+                response.headers["X-SharePoint-Proxy"] = "stale-cache"
+                return response
+
             else:
                 _LOGGER.error("Failed to fetch image from SharePoint: HTTP %d", status_code)
                 return web.Response(status=status_code if status_code else 500, text="Failed to fetch image")
                         
         except Exception as e:
             _LOGGER.error("Error proxying SharePoint image: %s", str(e))
+            if stale:
+                response = self._build_image_response(
+                    stale["content"],
+                    stale["content_type"],
+                    stale["etag"],
+                    include_body=include_body,
+                )
+                response.headers["X-SharePoint-Proxy"] = "stale-cache-exception"
+                return response
             return web.Response(status=500, text="Internal server error")
+
+    async def get(self, request, entry_id: str, image_id: str):
+        """Proxy SharePoint image requests."""
+        return await self._proxy_image(entry_id, image_id, include_body=True)
+
+    async def head(self, request, entry_id: str, image_id: str):
+        """Handle HEAD requests for image metadata compatibility."""
+        return await self._proxy_image(entry_id, image_id, include_body=False)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

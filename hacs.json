@@ -3,5 +3,5 @@
   "content_in_root": false,
   "render_readme": true,
   "domain": "sharepoint_photos",
-  "icon": "custom_components/sharepoint_photos/icon.svg"
+  "icon": "icon.png"
 }
