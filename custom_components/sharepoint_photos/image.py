@@ -65,6 +65,21 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
             _LOGGER.warning("Error in _get_current_photo: %s", e)
             return None
 
+    def _get_current_photo_index(self) -> int | None:
+        """Return rotating photo index used by the image entity."""
+        try:
+            data = self.coordinator.data or {}
+            photos = data.get("photos", [])
+            if not photos:
+                return None
+
+            cycle_time = 10
+            current_cycle = int(time.time() / cycle_time)
+            return current_cycle % len(photos)
+        except Exception as e:
+            _LOGGER.debug("Failed to compute current photo index: %s", e)
+            return None
+
     @property
     def image_last_updated(self) -> datetime | None:
         """Return the last update time for the image."""
@@ -83,13 +98,25 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
 
     async def _async_image_impl(self) -> Optional[bytes]:
         """Internal implementation of image fetch."""
+        started_at = time.monotonic()
         photo = self._get_current_photo()
+        photo_index = self._get_current_photo_index()
         if not photo:
             # No photo in coordinator data yet – return stale cache if available.
+            _LOGGER.debug(
+                "No current photo in coordinator data (cache_available=%s)",
+                self._last_content is not None,
+            )
             return self._last_content
 
         download_url = photo.get("download_url")
         if not download_url:
+            _LOGGER.debug(
+                "Current photo has no download URL (index=%s, name=%s, cache_available=%s)",
+                photo_index,
+                photo.get("name"),
+                self._last_content is not None,
+            )
             return self._last_content
 
         photo_name = photo.get("name")
@@ -99,35 +126,90 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
         # async_image() on every token request, so this avoids re-downloading
         # the same multi-MB file within the same 10-second rotation slot.
         if photo_name and photo_name == self._last_photo_name and self._last_content:
+            _LOGGER.debug(
+                "Serving cached image for same photo (index=%s, name=%s, size=%d bytes)",
+                photo_index,
+                photo_name,
+                len(self._last_content),
+            )
             return self._last_content
 
         # If a fetch is already in flight (e.g., a concurrent proxy request),
-        # serve the stale cache instead of spawning a second download.
+        # wait briefly for it when no stale cache exists to avoid returning None.
         if self._fetch_lock.locked():
-            _LOGGER.debug("Fetch already in progress, returning stale cache")
-            return self._last_content
+            if self._last_content:
+                _LOGGER.debug(
+                    "Fetch already in progress; returning stale cache (index=%s, name=%s, size=%d bytes)",
+                    photo_index,
+                    photo_name,
+                    len(self._last_content),
+                )
+                return self._last_content
+
+            _LOGGER.debug(
+                "Fetch already in progress with no stale cache; waiting for in-flight fetch (index=%s, name=%s)",
+                photo_index,
+                photo_name,
+            )
+            async with self._fetch_lock:
+                if self._last_content:
+                    _LOGGER.debug(
+                        "In-flight fetch produced cache; serving it (index=%s, name=%s, size=%d bytes)",
+                        photo_index,
+                        photo_name,
+                        len(self._last_content),
+                    )
+                    return self._last_content
+
+            _LOGGER.debug(
+                "In-flight fetch finished without cached content; proceeding with direct fetch (index=%s, name=%s)",
+                photo_index,
+                photo_name,
+            )
 
         async with self._fetch_lock:
             # Re-read after acquiring the lock; state may have changed while waiting.
             photo = self._get_current_photo()
+            photo_index = self._get_current_photo_index()
             if not photo:
+                _LOGGER.debug(
+                    "Photo disappeared while waiting for fetch lock (cache_available=%s)",
+                    self._last_content is not None,
+                )
                 return self._last_content
             download_url = photo.get("download_url")
             if not download_url:
+                _LOGGER.debug(
+                    "Photo missing download URL after lock acquire (index=%s, name=%s)",
+                    photo_index,
+                    photo.get("name"),
+                )
                 return self._last_content
             photo_name = photo.get("name")
 
             # Second-check: another coroutine may have fetched this photo already.
             if photo_name and photo_name == self._last_photo_name and self._last_content:
+                _LOGGER.debug(
+                    "Photo already fetched by another coroutine (index=%s, name=%s, size=%d bytes)",
+                    photo_index,
+                    photo_name,
+                    len(self._last_content),
+                )
                 return self._last_content
 
             api_client = self.coordinator._api_client
+            _LOGGER.debug(
+                "Fetching current image from SharePoint (index=%s, name=%s)",
+                photo_index,
+                photo_name,
+            )
             content, content_type, status_code = await api_client.fetch_image_content(download_url)
 
             if status_code in (401, 403):
                 _LOGGER.info("Image URL expired (status=%s), refreshing coordinator data", status_code)
                 await self.coordinator.async_request_refresh()
                 photo = self._get_current_photo()
+                photo_index = self._get_current_photo_index()
                 if not photo:
                     return self._last_content
                 download_url = photo.get("download_url")
@@ -142,19 +224,41 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
                 self._last_content = content
                 self._last_content_type = self._attr_content_type
                 self._last_photo_name = photo_name
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
+                _LOGGER.debug(
+                    "Image fetch success (index=%s, name=%s, status=%s, bytes=%d, type=%s, duration_ms=%d)",
+                    photo_index,
+                    photo_name,
+                    status_code,
+                    len(content),
+                    self._attr_content_type,
+                    elapsed_ms,
+                )
                 return content
 
             # Fetch failed – serve stale cache so WallPanel never sees a blank.
             if self._last_content:
                 if self._last_content_type:
                     self._attr_content_type = self._last_content_type
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
                 _LOGGER.debug(
-                    "Returning cached image after fetch failed (status=%s)",
+                    "Returning cached image after fetch failed (index=%s, name=%s, status=%s, cache_bytes=%d, duration_ms=%d)",
+                    photo_index,
+                    photo_name,
                     status_code,
+                    len(self._last_content),
+                    elapsed_ms,
                 )
                 return self._last_content
 
-            _LOGGER.debug("Failed to fetch image content (status=%s)", status_code)
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            _LOGGER.warning(
+                "No image available after fetch (index=%s, name=%s, status=%s, duration_ms=%d)",
+                photo_index,
+                photo_name,
+                status_code,
+                elapsed_ms,
+            )
             return None
 
     @property
