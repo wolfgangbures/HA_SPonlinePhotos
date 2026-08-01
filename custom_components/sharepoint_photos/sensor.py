@@ -130,22 +130,7 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
                     return None
             return None
         elif self.entity_description.key == SENSOR_CURRENT_PICTURE:
-            # Return the currently rotating picture URL
-            photos = data.get("photos", [])
-            if not photos:
-                return None
-            
-            photo_urls = [_select_photo_url(photo) for photo in photos]
-            photo_urls = [url for url in photo_urls if url]
-            if not photo_urls:
-                return None
-            
-            # Calculate rotating picture URL (changes every 10 seconds)
-            import time
-            cycle_time = 10  # seconds
-            current_cycle = int(time.time() / cycle_time)
-            picture_index = current_cycle % len(photo_urls)
-            return photo_urls[picture_index]
+            return data.get("current_proxy_url")
         
         return None
 
@@ -158,33 +143,26 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
         data = self.coordinator.data
         
         if self.entity_description.key == SENSOR_CURRENT_FOLDER:
-            # For the main folder sensor, include all photo URLs
+            # For the main folder sensor, include compact metadata for the stable current image.
             photos = data.get("photos", [])
             photo_urls = [_select_photo_url(photo) for photo in photos]
             photo_urls = [url for url in photo_urls if url]
-            
-            # Calculate rotating picture URL (changes every 10 seconds)
-            current_picture_url = None
+
+            current_picture_url = data.get("current_proxy_url")
             current_photo = None
             preview_urls: List[str] = []
 
+            current_index = data.get("current_photo_index")
+            if current_index is not None and photos and 0 <= current_index < len(photos):
+                current_photo = photos[current_index]
+
             if photo_urls:
-                # Use current time to create a rotating index that changes every 10 seconds
-                import time
-
-                cycle_time = 10  # seconds
-                current_cycle = int(time.time() / cycle_time)
-                picture_index = current_cycle % len(photo_urls)
-                current_picture_url = photo_urls[picture_index]
-                if photos and picture_index < len(photos):
-                    current_photo = photos[picture_index]
-
                 preview_urls = photo_urls[:5]  # keep attributes compact for recorder
 
             attributes: Dict[str, Any] = {
                 "folder_path": data.get("folder_path"),
                 "photo_count": len(photos),
-                "rotation_cycle_seconds": 10,
+                "rotation_cycle_seconds": data.get("rotation_interval_seconds"),
                 "current_picture_url": current_picture_url,
                 "current_picture_label": current_photo.get("name") if current_photo else None,
             }
@@ -215,22 +193,7 @@ class SharePointPhotosSensor(CoordinatorEntity, SensorEntity):
         data = self.coordinator.data
         
         if self.entity_description.key == SENSOR_CURRENT_FOLDER:
-            # For the main folder sensor, return the rotating picture
-            photos = data.get("photos", [])
-            if not photos:
-                return None
-            
-            photo_urls = [_select_photo_url(photo) for photo in photos]
-            photo_urls = [url for url in photo_urls if url]
-            if not photo_urls:
-                return None
-            
-            # Calculate rotating picture URL (same logic as attributes)
-            import time
-            cycle_time = 10  # seconds
-            current_cycle = int(time.time() / cycle_time)
-            picture_index = current_cycle % len(photo_urls)
-            return photo_urls[picture_index]
+            return data.get("current_proxy_url")
         
         return None
 
@@ -263,13 +226,6 @@ class SharePointPhotosRotatingSensor(CoordinatorEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         """Run when entity is added to hass."""
         await super().async_added_to_hass()
-        
-        # Set up timer to update every 10 seconds
-        self._update_timer = async_track_time_interval(
-            self.hass,
-            self._async_update_state,
-            timedelta(seconds=10)
-        )
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity is removed from hass."""
@@ -289,22 +245,7 @@ class SharePointPhotosRotatingSensor(CoordinatorEntity, SensorEntity):
             return None
 
         data = self.coordinator.data
-        photos = data.get("photos", [])
-        if not photos:
-            return None
-        
-        photo_urls = [_select_photo_url(photo) for photo in photos]
-        photo_urls = [url for url in photo_urls if url]
-        if not photo_urls:
-            return None
-        
-        # Return proxy/thumbnail URL for the current photo so dashboards can load it directly
-        import time
-        cycle_time = 10  # seconds
-        current_cycle = int(time.time() / cycle_time)
-        picture_index = current_cycle % len(photo_urls)
-        
-        return photo_urls[picture_index]
+        return data.get("current_proxy_url")
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
@@ -316,22 +257,18 @@ class SharePointPhotosRotatingSensor(CoordinatorEntity, SensorEntity):
         photos = data.get("photos", [])
         photo_urls = [_select_photo_url(photo) for photo in photos]
         photo_urls = [url for url in photo_urls if url]
-        
-        # Calculate current index for display
-        import time
-        cycle_time = 10  # seconds
-        current_cycle = int(time.time() / cycle_time)
-        current_index = current_cycle % len(photo_urls) if photo_urls else 0
-        
+
+        current_index = data.get("current_photo_index") or 0
         current_photo = photos[current_index] if photos and current_index < len(photos) else None
+        current_proxy_url = data.get("current_proxy_url")
         
         attributes = {
             "total_photos": len(photo_urls),
             "current_index": current_index + 1,  # 1-based for display
-            "current_photo_url": photo_urls[current_index] if photo_urls else None,
+            "current_photo_url": current_proxy_url,
             "current_photo_name": current_photo.get("name") if current_photo else None,
             "current_photo_label": f"Photo {current_index + 1}: {current_photo.get('name')}" if current_photo else None,
-            "cycle_time_seconds": 10,
+            "cycle_time_seconds": data.get("rotation_interval_seconds"),
             "folder_name": data.get("folder_name"),
         }
         
@@ -355,20 +292,9 @@ class SharePointPhotosRotatingSensor(CoordinatorEntity, SensorEntity):
             return None
 
         data = self.coordinator.data
-        photos = data.get("photos", [])
-        if not photos:
-            return None
-        
-        # Calculate rotating picture index (changes every 10 seconds)
-        import time
-        cycle_time = 10  # seconds
-        current_cycle = int(time.time() / cycle_time)
-        picture_index = current_cycle % len(photos)
-        
-        current_photo = photos[picture_index]
-        preferred_url = _select_photo_url(current_photo)
+        preferred_url = data.get("current_proxy_url")
         if preferred_url:
-            _LOGGER.debug("Entity picture using URL: %s", preferred_url[:100])
+            _LOGGER.debug("Entity picture using stable current image URL: %s", preferred_url)
         return preferred_url
 
     @property
