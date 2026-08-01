@@ -51,15 +51,19 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
         self._attr_content_type = "image/jpeg"
 
     def _get_current_photo(self):
-        data = self.coordinator.data or {}
-        photos = data.get("photos", [])
-        if not photos:
-            return None
+        try:
+            data = self.coordinator.data or {}
+            photos = data.get("photos", [])
+            if not photos:
+                return None
 
-        cycle_time = 10
-        current_cycle = int(time.time() / cycle_time)
-        photo_index = current_cycle % len(photos)
-        return photos[photo_index]
+            cycle_time = 10
+            current_cycle = int(time.time() / cycle_time)
+            photo_index = current_cycle % len(photos)
+            return photos[photo_index]
+        except Exception as e:
+            _LOGGER.warning("Error in _get_current_photo: %s", e)
+            return None
 
     @property
     def image_last_updated(self) -> datetime | None:
@@ -70,6 +74,15 @@ class SharePointPhotosCurrentImage(CoordinatorEntity, ImageEntity):
 
     async def async_image(self) -> Optional[bytes]:
         """Return bytes of image."""
+        try:
+            return await self._async_image_impl()
+        except Exception as e:
+            _LOGGER.error("Unexpected error in async_image: %s", e)
+            # Always return stale cache on any exception to prevent WallPanel from seeing failures
+            return self._last_content
+
+    async def _async_image_impl(self) -> Optional[bytes]:
+        """Internal implementation of image fetch."""
         photo = self._get_current_photo()
         if not photo:
             # No photo in coordinator data yet – return stale cache if available.

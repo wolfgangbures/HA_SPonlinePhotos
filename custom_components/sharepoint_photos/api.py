@@ -27,6 +27,23 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _detect_image_content_type(content: bytes) -> str | None:
+    """Infer image mime type from magic bytes when headers are unreliable."""
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp"
+    if content.startswith(b"BM"):
+        return "image/bmp"
+    if content.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
+    return None
+
+
 class SharePointPhotosApiClient:
     """Client for interacting with SharePoint via Microsoft Graph API."""
 
@@ -635,11 +652,42 @@ class SharePointPhotosApiClient:
                     self._token_expires = None
                     # Return the error info so the caller can handle it appropriately
                     return b"", "", 401
+                elif response.status == 403:
+                    _LOGGER.warning("Download URL denied (403), this requires refreshing photo data")
+                    self._access_token = None
+                    self._token_expires = None
+                    return b"", "", 403
                 elif response.status == 200:
                     content = await response.read()
-                    content_type = response.headers.get('content-type', 'image/jpeg')
-                    _LOGGER.debug("Successfully fetched image: %d bytes", len(content))
-                    return content, content_type, 200
+                    header_content_type = response.headers.get("content-type", "")
+                    normalized_header_type = header_content_type.split(";", 1)[0].strip().lower()
+
+                    if not content:
+                        _LOGGER.warning("Empty body for image response, forcing URL refresh")
+                        return b"", "", 403
+
+                    if normalized_header_type.startswith("image/"):
+                        _LOGGER.debug("Successfully fetched image: %d bytes", len(content))
+                        return content, normalized_header_type, 200
+
+                    inferred_type = _detect_image_content_type(content)
+                    if inferred_type:
+                        _LOGGER.debug(
+                            "Image fetched with non-image content-type '%s'; inferred '%s' from bytes",
+                            normalized_header_type or "<missing>",
+                            inferred_type,
+                        )
+                        return content, inferred_type, 200
+
+                    preview = content[:80].decode("utf-8", errors="ignore").strip().replace("\n", " ")
+                    _LOGGER.warning(
+                        "Download URL returned non-image payload (content-type=%s, preview=%s), forcing refresh",
+                        normalized_header_type or "<missing>",
+                        preview,
+                    )
+                    self._access_token = None
+                    self._token_expires = None
+                    return b"", "", 403
                 else:
                     _LOGGER.error("Failed to fetch image: HTTP %d", response.status)
                     return b"", "", response.status
