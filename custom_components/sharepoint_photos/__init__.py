@@ -4,24 +4,28 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import random
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import HomeAssistantView
+from homeassistant.helpers.event import async_track_time_interval
 
 from .api import SharePointPhotosApiClient
 from .const import (
     CONF_BASE_FOLDER_PATH,
     CONF_FOLDER_HISTORY_SIZE,
     CONF_MIN_PHOTO_COUNT,
+    CONF_ROTATION_INTERVAL_SECONDS,
     CONF_LIBRARY_NAME,
     DEFAULT_BASE_FOLDER_PATH,
     DEFAULT_FOLDER_HISTORY_SIZE,
     DEFAULT_MIN_PHOTO_COUNT,
+    DEFAULT_ROTATION_INTERVAL_SECONDS,
     DEFAULT_LIBRARY_NAME,
     DOMAIN,
 )
@@ -223,6 +227,48 @@ class SharePointImageProxyView(HomeAssistantView):
         return await self._proxy_image(entry_id, image_id, include_body=False)
 
 
+class SharePointCurrentImageView(HomeAssistantView):
+    """Serve the currently cached integration image via a stable URL."""
+
+    url = "/api/sharepoint_photos/current/{entry_id}"
+    name = "api:sharepoint_photos:current_image"
+    requires_auth = False
+
+    def __init__(self, hass: HomeAssistant):
+        """Initialize the current-image view."""
+        self.hass = hass
+
+    async def _handle(self, entry_id: str, include_body: bool = True):
+        """Return the current cached image."""
+        from aiohttp import web
+
+        coordinator = self.hass.data.get(DOMAIN, {}).get(entry_id)
+        if not coordinator:
+            return web.Response(status=404, text="Integration not found")
+
+        content, content_type = await coordinator.async_get_or_load_current_image()
+        if not content:
+            return web.Response(status=503, text="Current image not available")
+
+        response_headers = {
+            "Cache-Control": "no-store",
+            "Content-Length": str(len(content)),
+            "Content-Disposition": "inline",
+            "Access-Control-Allow-Origin": "*",
+        }
+        if include_body:
+            return web.Response(body=content, content_type=content_type or "image/jpeg", headers=response_headers)
+        return web.Response(status=200, content_type=content_type or "image/jpeg", headers=response_headers)
+
+    async def get(self, request, entry_id: str):
+        """Return current image body."""
+        return await self._handle(entry_id, include_body=True)
+
+    async def head(self, request, entry_id: str):
+        """Return current image metadata."""
+        return await self._handle(entry_id, include_body=False)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up this integration using UI."""
     if hass.data.get(DOMAIN) is None:
@@ -249,6 +295,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CONF_MIN_PHOTO_COUNT,
         entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT),
     )
+    rotation_interval_seconds = entry.options.get(
+        CONF_ROTATION_INTERVAL_SECONDS,
+        entry.data.get(CONF_ROTATION_INTERVAL_SECONDS, DEFAULT_ROTATION_INTERVAL_SECONDS),
+    )
 
     client = SharePointPhotosApiClient(
         hass=hass,
@@ -262,11 +312,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         min_photos_per_folder=min_photos_per_folder,
     )
 
-    coordinator = SharePointPhotosDataUpdateCoordinator(hass, client=client, entry_id=entry.entry_id)
+    coordinator = SharePointPhotosDataUpdateCoordinator(
+        hass,
+        client=client,
+        entry_id=entry.entry_id,
+        rotation_interval_seconds=rotation_interval_seconds,
+    )
 
     # Set empty placeholder data so entities are available immediately,
     # then schedule the actual folder scan as a background task.
-    coordinator.async_set_updated_data({})
+    coordinator.async_set_updated_data(coordinator.build_initial_state())
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     async def _deferred_first_refresh(_=None):
@@ -281,6 +336,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(SharePointImageProxyView(hass))
         hass.http._sharepoint_photos_proxy_registered = True
         _LOGGER.debug("Registered SharePoint Photos image proxy view")
+
+    if not hasattr(hass.http, '_sharepoint_photos_current_view_registered'):
+        hass.http.register_view(SharePointCurrentImageView(hass))
+        hass.http._sharepoint_photos_current_view_registered = True
+        _LOGGER.debug("Registered SharePoint Photos current image view")
+
+    coordinator.start_rotation_timer()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
@@ -324,17 +386,144 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
         hass: HomeAssistant,
         client: SharePointPhotosApiClient,
         entry_id: str,
+        rotation_interval_seconds: int,
     ) -> None:
         """Initialize."""
         self.client = client
         self._api_client = client  # Also store as _api_client for the proxy view
         self.entry_id = entry_id
+        self.rotation_interval_seconds = max(5, int(rotation_interval_seconds or DEFAULT_ROTATION_INTERVAL_SECONDS))
+        self._current_photo_index: int | None = None
+        self._current_photo_name: str | None = None
+        self._current_image_bytes: bytes | None = None
+        self._current_image_type: str = "image/jpeg"
+        self._image_lock = asyncio.Lock()
+        self._rotation_unsub = None
         super().__init__(
             hass=hass,
             logger=_LOGGER,
             name=DOMAIN,
             update_interval=None,  # Disable automatic updates - only manual refresh
         )
+
+    def build_initial_state(self) -> dict[str, Any]:
+        """Return initial empty state with stable current-image URL."""
+        return {
+            "photos": [],
+            "photo_count": 0,
+            "current_proxy_url": f"/api/sharepoint_photos/current/{self.entry_id}",
+            "rotation_interval_seconds": self.rotation_interval_seconds,
+            "current_photo_index": None,
+            "current_photo_name": None,
+        }
+
+    def _apply_proxy_urls(self, data: dict[str, Any]) -> None:
+        """Inject entry ID into per-photo proxy URLs."""
+        photos = data.get("photos", [])
+        for photo in photos:
+            if "proxy_url" in photo:
+                photo["proxy_url"] = photo["proxy_url"].replace("{entry_id}", self.entry_id)
+
+    def _build_state_payload(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Attach current-image metadata to coordinator payload."""
+        payload = dict(data)
+        payload["current_proxy_url"] = f"/api/sharepoint_photos/current/{self.entry_id}"
+        payload["rotation_interval_seconds"] = self.rotation_interval_seconds
+        payload["photo_count"] = len(payload.get("photos", []))
+        payload["current_photo_index"] = self._current_photo_index
+        payload["current_photo_name"] = self._current_photo_name
+        return payload
+
+    async def _try_swap_current_photo(self, photos: list[dict[str, Any]], force: bool = False) -> bool:
+        """Fetch a new random photo and atomically swap cache on success."""
+        if not photos:
+            return False
+
+        indices = list(range(len(photos)))
+        random.shuffle(indices)
+        if not force and self._current_photo_index in indices and len(indices) > 1:
+            indices = [idx for idx in indices if idx != self._current_photo_index]
+
+        max_attempts = min(3, len(indices))
+        for idx in indices[:max_attempts]:
+            candidate = photos[idx]
+            download_url = candidate.get("download_url")
+            if not download_url:
+                continue
+
+            content, content_type, status_code = await self._api_client.fetch_image_content(download_url)
+            if status_code == 200 and content:
+                self._current_image_bytes = content
+                if content_type:
+                    self._current_image_type = content_type
+                self._current_photo_index = idx
+                self._current_photo_name = candidate.get("name")
+                _LOGGER.debug(
+                    "Swapped current photo (index=%s, name=%s, bytes=%d)",
+                    self._current_photo_index,
+                    self._current_photo_name,
+                    len(content),
+                )
+                return True
+
+            _LOGGER.debug(
+                "Candidate photo fetch failed (index=%s, name=%s, status=%s)",
+                idx,
+                candidate.get("name"),
+                status_code,
+            )
+
+        return False
+
+    async def async_rotate_current_photo(self, force: bool = False) -> bool:
+        """Rotate to a new random photo from the current folder."""
+        async with self._image_lock:
+            data = self.data or {}
+            photos = data.get("photos", [])
+            swapped = await self._try_swap_current_photo(photos, force=force)
+            if swapped:
+                self.async_set_updated_data(self._build_state_payload(data))
+            return swapped
+
+    async def async_get_or_load_current_image(self) -> tuple[bytes | None, str | None]:
+        """Return cached current image, loading one if cache is still empty."""
+        if self._current_image_bytes:
+            return self._current_image_bytes, self._current_image_type
+
+        async with self._image_lock:
+            if self._current_image_bytes:
+                return self._current_image_bytes, self._current_image_type
+
+            data = self.data or {}
+            photos = data.get("photos", [])
+            swapped = await self._try_swap_current_photo(photos, force=True)
+            if swapped:
+                self.async_set_updated_data(self._build_state_payload(data))
+
+        return self._current_image_bytes, self._current_image_type
+
+    @callback
+    def _async_rotation_tick(self, now=None) -> None:
+        """Timer callback for periodic image swaps."""
+        self.hass.async_create_task(self.async_rotate_current_photo())
+
+    def start_rotation_timer(self) -> None:
+        """Start periodic rotation timer."""
+        if self._rotation_unsub is not None:
+            return
+
+        self._rotation_unsub = async_track_time_interval(
+            self.hass,
+            self._async_rotation_tick,
+            timedelta(seconds=self.rotation_interval_seconds),
+        )
+        _LOGGER.info("Started rotation timer (interval=%ss)", self.rotation_interval_seconds)
+
+    def stop_rotation_timer(self) -> None:
+        """Stop periodic rotation timer."""
+        if self._rotation_unsub is not None:
+            self._rotation_unsub()
+            self._rotation_unsub = None
 
     async def _async_update_data(self):
         """Update data via library."""
@@ -345,15 +534,16 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
             
             if data and data.get("photos"):
                 _LOGGER.info("Found %d photos in folder '%s'", len(data["photos"]), data.get("folder_name", "unknown"))
-                # Update proxy URLs with the actual entry_id
-                for photo in data["photos"]:
-                    if "proxy_url" in photo:
-                        photo["proxy_url"] = photo["proxy_url"].replace("{entry_id}", self.entry_id)
+                self._apply_proxy_urls(data)
                 _LOGGER.debug("Updated proxy URLs for all photos")
+                await self._try_swap_current_photo(data["photos"], force=True)
             else:
                 _LOGGER.warning("No photos found in data update")
                 
-            return data
+            if not data:
+                data = self.build_initial_state()
+
+            return self._build_state_payload(data)
         except Exception as exception:
             _LOGGER.error("Error during data update: %s", str(exception))
             import traceback
@@ -367,13 +557,10 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
             data = await self.client.async_get_random_folder_photos(force_new_folder=True)
             
             if data and data.get("photos"):
-                # Update proxy URLs with the actual entry_id
-                for photo in data["photos"]:
-                    if "proxy_url" in photo:
-                        photo["proxy_url"] = photo["proxy_url"].replace("{entry_id}", self.entry_id)
+                self._apply_proxy_urls(data)
+                await self._try_swap_current_photo(data["photos"], force=True)
                 
-                # Update the coordinator's data directly
-                self.async_set_updated_data(data)
+                self.async_set_updated_data(self._build_state_payload(data))
                 _LOGGER.info("Successfully switched to new folder: %s (%d photos)", 
                            data.get("folder_name", "unknown"), len(data["photos"]))
                 return data
@@ -387,6 +574,10 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator:
+        coordinator.stop_rotation_timer()
+
     try:
         unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     except ValueError:

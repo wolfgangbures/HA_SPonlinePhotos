@@ -13,6 +13,7 @@ CONF_BASE_FOLDER_PATH = "base_folder_path"
 CONF_REFRESH_INTERVAL = "refresh_interval"
 CONF_FOLDER_HISTORY_SIZE = "folder_history_size"
 CONF_MIN_PHOTO_COUNT = "min_photo_count"
+CONF_ROTATION_INTERVAL_SECONDS = "rotation_interval_seconds"
 
 # Default values
 DEFAULT_LIBRARY_NAME = "Freigegebene Dokumente"  # German SharePoint default
@@ -20,6 +21,7 @@ DEFAULT_BASE_FOLDER_PATH = "/General/Fotos"
 DEFAULT_REFRESH_INTERVAL = 6  # hours
 DEFAULT_FOLDER_HISTORY_SIZE = 30
 DEFAULT_MIN_PHOTO_COUNT = 5
+DEFAULT_ROTATION_INTERVAL_SECONDS = 10
 
 # Microsoft Graph API
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"

@@ -12,7 +12,8 @@
           "library_name": "Document Library Name",
           "base_folder_path": "Base Folder Path",
           "folder_history_size": "Recent Folder History Size",
-          "min_photo_count": "Minimum Photos Per Folder"
+          "min_photo_count": "Minimum Photos Per Folder",
+          "rotation_interval_seconds": "Picture Rotation Interval (seconds)"
         },
         "data_description": {
           "tenant_id": "Your Azure Active Directory tenant ID (GUID)",
@@ -22,7 +23,8 @@
           "library_name": "Name of the document library containing your photos. Common values: 'Documents' (English), 'Freigegebene Dokumente' (German), 'Shared Documents'",
           "base_folder_path": "Path to the folder containing your photo folders (e.g., /Photos, /General/Fotos)",
           "folder_history_size": "Number of recently used folders to exclude when picking a new random folder (set to 0 to disable)",
-          "min_photo_count": "Only include folders that contain at least this many photos (default 5)"
+          "min_photo_count": "Only include folders that contain at least this many photos (default 5)",
+          "rotation_interval_seconds": "How often the integration should swap to a new random photo from the current folder"
         }
       }
     },
@@ -52,10 +54,12 @@
           "library_name": "Document Library Name",
           "base_folder_path": "Base Folder Path",
           "folder_history_size": "Recent Folder History Size",
-          "min_photo_count": "Minimum Photos Per Folder"
+          "min_photo_count": "Minimum Photos Per Folder",
+          "rotation_interval_seconds": "Picture Rotation Interval (seconds)"
         },
         "data_description": {
-          "client_secret": "Update your client secret if it has expired or been regenerated in Azure AD"
+          "client_secret": "Update your client secret if it has expired or been regenerated in Azure AD",
+          "rotation_interval_seconds": "How often the integration should swap to a new random photo from the current folder"
         }
       }
     }

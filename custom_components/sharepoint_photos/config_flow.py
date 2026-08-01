@@ -16,12 +16,14 @@ from .const import (
     CONF_CLIENT_SECRET,
     CONF_FOLDER_HISTORY_SIZE,
     CONF_MIN_PHOTO_COUNT,
+    CONF_ROTATION_INTERVAL_SECONDS,
     CONF_LIBRARY_NAME,
     CONF_SITE_URL,
     CONF_TENANT_ID,
     DEFAULT_BASE_FOLDER_PATH,
     DEFAULT_FOLDER_HISTORY_SIZE,
     DEFAULT_MIN_PHOTO_COUNT,
+    DEFAULT_ROTATION_INTERVAL_SECONDS,
     DEFAULT_LIBRARY_NAME,
     DOMAIN,
     ERROR_AUTH_FAILED,
@@ -101,6 +103,10 @@ class SharePointPhotosConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_MIN_PHOTO_COUNT,
                     default=DEFAULT_MIN_PHOTO_COUNT
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+                vol.Optional(
+                    CONF_ROTATION_INTERVAL_SECONDS,
+                    default=DEFAULT_ROTATION_INTERVAL_SECONDS,
+                ): vol.All(vol.Coerce(int), vol.Range(min=5, max=3600)),
             }),
             errors=errors,
         )
@@ -216,6 +222,16 @@ class SharePointPhotosOptionsFlow(config_entries.OptionsFlow):
                         self._config_entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT)
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+                vol.Optional(
+                    CONF_ROTATION_INTERVAL_SECONDS,
+                    default=self._config_entry.options.get(
+                        CONF_ROTATION_INTERVAL_SECONDS,
+                        self._config_entry.data.get(
+                            CONF_ROTATION_INTERVAL_SECONDS,
+                            DEFAULT_ROTATION_INTERVAL_SECONDS,
+                        ),
+                    ),
+                ): vol.All(vol.Coerce(int), vol.Range(min=5, max=3600)),
             }),
             errors=errors,
         )
