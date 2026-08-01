@@ -34,6 +34,27 @@ PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.IMAGE]
 
 _LOGGER = logging.getLogger(__name__)
 
+_DOMAIN_SERVICES_REGISTERED = "_services_registered"
+
+
+def _iter_entry_ids(domain_data: dict[str, Any]) -> list[str]:
+    """Return real config-entry IDs stored under hass.data[DOMAIN]."""
+    return [key for key in domain_data.keys() if not key.startswith("_")]
+
+
+def _resolve_target_coordinator(hass: HomeAssistant, requested_entry_id: str | None):
+    """Resolve the coordinator for a service call."""
+    domain_data = hass.data.get(DOMAIN, {})
+
+    if requested_entry_id:
+        return domain_data.get(requested_entry_id)
+
+    entry_ids = _iter_entry_ids(domain_data)
+    if not entry_ids:
+        return None
+
+    return domain_data.get(entry_ids[0])
+
 
 class SharePointImageProxyView(HomeAssistantView):
     """Proxy view for SharePoint images to handle authentication."""
@@ -274,6 +295,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if hass.data.get(DOMAIN) is None:
         hass.data.setdefault(DOMAIN, {})
 
+    domain_data = hass.data[DOMAIN]
+
     tenant_id = entry.data.get("tenant_id")
     client_id = entry.data.get("client_id")
     # Use client_secret from options if updated, otherwise fall back to initial config
@@ -322,7 +345,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set empty placeholder data so entities are available immediately,
     # then schedule the actual folder scan as a background task.
     coordinator.async_set_updated_data(coordinator.build_initial_state())
-    hass.data[DOMAIN][entry.entry_id] = coordinator
+    previous_coordinator = domain_data.get(entry.entry_id)
+    if previous_coordinator and previous_coordinator is not coordinator:
+        try:
+            previous_coordinator.stop_rotation_timer()
+        except Exception:
+            _LOGGER.debug("Failed to stop previous coordinator timer for entry %s", entry.entry_id)
+    domain_data[entry.entry_id] = coordinator
 
     async def _deferred_first_refresh(_=None):
         """Run the first full folder scan after startup completes."""
@@ -342,38 +371,61 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http._sharepoint_photos_current_view_registered = True
         _LOGGER.debug("Registered SharePoint Photos current image view")
 
-    coordinator.start_rotation_timer()
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
-    # Register services
-    async def handle_refresh_photos(call):
-        """Handle the refresh photos service call - switches to a NEW random folder."""
-        coordinator = hass.data[DOMAIN][entry.entry_id]
-        await coordinator.async_refresh_new_folder()
+    # Register domain services only once across reloads.
+    if not domain_data.get(_DOMAIN_SERVICES_REGISTERED):
 
-    async def handle_select_folder(call):
-        """Handle the select folder service call."""
-        folder_path = call.data.get("folder_path")
-        if folder_path:
-            coordinator = hass.data[DOMAIN][entry.entry_id]
-            await coordinator.client.select_specific_folder(folder_path)
-            await coordinator.async_request_refresh()
-    
-    async def handle_refresh_token(call):
-        """Handle the refresh token service call."""
-        coordinator = hass.data[DOMAIN][entry.entry_id]
-        # Clear the current token to force re-authentication
-        coordinator.client._access_token = None
-        coordinator.client._token_expires = None
-        _LOGGER.info("Cleared authentication token, next API call will re-authenticate")
-        # Refresh current folder data (don't change folders)
-        await coordinator.async_request_refresh()
+        async def handle_refresh_photos(call):
+            """Handle the refresh photos service call - switches to a NEW random folder."""
+            requested_entry_id = call.data.get("entry_id")
+            target = _resolve_target_coordinator(hass, requested_entry_id)
+            if not target:
+                _LOGGER.warning("No coordinator available for refresh_photos service")
+                return
+            await target.async_refresh_new_folder()
 
-    hass.services.async_register(DOMAIN, "refresh_photos", handle_refresh_photos)
-    hass.services.async_register(DOMAIN, "select_folder", handle_select_folder)
-    hass.services.async_register(DOMAIN, "refresh_token", handle_refresh_token)
+        async def handle_select_folder(call):
+            """Handle the select folder service call."""
+            folder_path = call.data.get("folder_path")
+            if not folder_path:
+                return
+
+            requested_entry_id = call.data.get("entry_id")
+            target = _resolve_target_coordinator(hass, requested_entry_id)
+            if not target:
+                _LOGGER.warning("No coordinator available for select_folder service")
+                return
+
+            await target.client.select_specific_folder(folder_path)
+            await target.async_request_refresh()
+
+        async def handle_refresh_token(call):
+            """Handle the refresh token service call."""
+            requested_entry_id = call.data.get("entry_id")
+            target = _resolve_target_coordinator(hass, requested_entry_id)
+            if not target:
+                _LOGGER.warning("No coordinator available for refresh_token service")
+                return
+
+            # Clear the current token to force re-authentication
+            target.client._access_token = None
+            target.client._token_expires = None
+            _LOGGER.info("Cleared authentication token, next API call will re-authenticate")
+            # Refresh current folder data (don't change folders)
+            await target.async_request_refresh()
+
+        if not hass.services.has_service(DOMAIN, "refresh_photos"):
+            hass.services.async_register(DOMAIN, "refresh_photos", handle_refresh_photos)
+        if not hass.services.has_service(DOMAIN, "select_folder"):
+            hass.services.async_register(DOMAIN, "select_folder", handle_select_folder)
+        if not hass.services.has_service(DOMAIN, "refresh_token"):
+            hass.services.async_register(DOMAIN, "refresh_token", handle_refresh_token)
+
+        domain_data[_DOMAIN_SERVICES_REGISTERED] = True
+
+    coordinator.start_rotation_timer()
 
     return True
 
@@ -399,6 +451,7 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
         self._current_image_type: str = "image/jpeg"
         self._image_lock = asyncio.Lock()
         self._rotation_unsub = None
+        self._rotation_task: asyncio.Task | None = None
         super().__init__(
             hass=hass,
             logger=_LOGGER,
@@ -505,7 +558,18 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
     @callback
     def _async_rotation_tick(self, now=None) -> None:
         """Timer callback for periodic image swaps."""
-        self.hass.async_create_task(self.async_rotate_current_photo())
+        if self._rotation_task is not None and not self._rotation_task.done():
+            _LOGGER.debug("Skipping rotation tick because previous rotation task is still running")
+            return
+
+        self._rotation_task = self.hass.async_create_task(self._async_run_rotation_tick())
+
+    async def _async_run_rotation_tick(self) -> None:
+        """Run one rotation tick with task-level guard."""
+        try:
+            await self.async_rotate_current_photo()
+        except Exception:
+            _LOGGER.exception("Unexpected error during scheduled rotation tick")
 
     def start_rotation_timer(self) -> None:
         """Start periodic rotation timer."""
@@ -524,6 +588,9 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
         if self._rotation_unsub is not None:
             self._rotation_unsub()
             self._rotation_unsub = None
+
+        if self._rotation_task is not None and not self._rotation_task.done():
+            self._rotation_task.cancel()
 
     async def _async_update_data(self):
         """Update data via library."""
@@ -587,6 +654,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unloaded:
         hass.data[DOMAIN].pop(entry.entry_id, None)
+
+        domain_data = hass.data.get(DOMAIN, {})
+        if not _iter_entry_ids(domain_data):
+            if hass.services.has_service(DOMAIN, "refresh_photos"):
+                hass.services.async_remove(DOMAIN, "refresh_photos")
+            if hass.services.has_service(DOMAIN, "select_folder"):
+                hass.services.async_remove(DOMAIN, "select_folder")
+            if hass.services.has_service(DOMAIN, "refresh_token"):
+                hass.services.async_remove(DOMAIN, "refresh_token")
+            domain_data[_DOMAIN_SERVICES_REGISTERED] = False
 
     return unloaded
 
