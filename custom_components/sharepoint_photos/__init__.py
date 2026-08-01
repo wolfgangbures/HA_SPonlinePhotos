@@ -705,6 +705,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    """Persist updated options without reloading the integration immediately."""
+    _LOGGER.info(
+        "Config entry %s updated; saved options will be applied on the next Home Assistant restart",
+        entry.entry_id,
+    )

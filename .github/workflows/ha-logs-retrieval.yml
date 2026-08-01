@@ -2,14 +2,82 @@ name: Retrieve HA Logs
 
 on:
   workflow_dispatch:
+    inputs:
+      ha_base_url:
+        description: "Home Assistant base URL (defaults to repository variable HA_BASE_URL)"
+        required: false
+        type: string
+        default: ""
+      log_endpoint:
+        description: "Log endpoint path"
+        required: false
+        type: string
+        default: "/api/error_log"
+      output_filename:
+        description: "Filename for the downloaded log"
+        required: false
+        type: string
+        default: "ha-logs.txt"
+      timeout_seconds:
+        description: "Request timeout in seconds"
+        required: false
+        type: number
+        default: 30
+
+permissions:
+  contents: read
 
 jobs:
   retrieve:
-    uses: wolfgangbures/HA1180/.github/workflows/ha-logs-retrieval.yml@main
-    with:
-      ha_base_url: ${{ vars.HA_BASE_URL }}
-      log_endpoint: /api/error_log
-      output_filename: ha-logs.txt
-      timeout_seconds: 30
-    secrets:
-      ha_token: ${{ secrets.HA_TOKEN }}
+    runs-on: ubuntu-latest
+
+    env:
+      HA_BASE_URL: ${{ inputs.ha_base_url != '' && inputs.ha_base_url || vars.HA_BASE_URL }}
+      HA_TOKEN: ${{ secrets.HA_TOKEN }}
+      LOG_ENDPOINT: ${{ inputs.log_endpoint }}
+      OUTPUT_FILENAME: ${{ inputs.output_filename }}
+      TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+
+    steps:
+      - name: Fetch live HA logs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${HA_BASE_URL:-}" ]]; then
+            echo "HA_BASE_URL is not configured. Set repository variable HA_BASE_URL or pass workflow input ha_base_url." >&2
+            exit 1
+          fi
+
+          if [[ -z "${HA_TOKEN:-}" ]]; then
+            echo "HA_TOKEN is not configured. Add a repository secret named HA_TOKEN." >&2
+            exit 1
+          fi
+
+          endpoint="${LOG_ENDPOINT:-/api/error_log}"
+          if [[ "${endpoint}" != /* ]]; then
+            endpoint="/${endpoint}"
+          fi
+
+          url="${HA_BASE_URL%/}${endpoint}"
+          output_file="${OUTPUT_FILENAME:-ha-logs.txt}"
+          timeout_seconds="${TIMEOUT_SECONDS:-30}"
+
+          echo "Fetching live logs from ${url}"
+          curl --fail --location --silent --show-error \
+            --max-time "${timeout_seconds}" \
+            -H "Authorization: Bearer ${HA_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "${url}" \
+            -o "${output_file}"
+
+          echo "Saved $(wc -c < "${output_file}") bytes to ${output_file}"
+          echo "Preview:"
+          sed -n '1,200p' "${output_file}"
+
+      - name: Upload HA logs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ha-logs
+          path: ${{ env.OUTPUT_FILENAME }}
+          if-no-files-found: error

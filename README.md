@@ -101,6 +101,22 @@ The integration includes a built-in image proxy that:
 - **Specific folder**: Use `sharepoint_photos.select_folder` service to choose a specific folder
 - **Automation control**: Create automations to control when folders change
 
+## Live HA Logs
+
+This repository includes a GitHub Actions workflow that fetches the live Home Assistant error log from your HA instance and uploads it as an artifact named `ha-logs`.
+
+### Requirements
+- Repository variable `HA_BASE_URL` set to your HA URL, for example `https://your-ha.example.com`
+- Repository secret `HA_TOKEN` with a valid long-lived Home Assistant token
+
+### How to run
+1. Open the GitHub Actions tab in this repository.
+2. Run **Retrieve HA Logs**.
+3. Optionally override `ha_base_url`, `log_endpoint`, `output_filename`, or `timeout_seconds`.
+4. Download the `ha-logs` artifact from the workflow run.
+
+The default endpoint is `/api/error_log`, which is the same endpoint the AI issue workflow consumes.
+
 ## Sensors Created
 
 The integration creates these sensors:
