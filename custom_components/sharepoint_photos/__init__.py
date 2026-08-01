@@ -35,6 +35,9 @@ PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.IMAGE]
 _LOGGER = logging.getLogger(__name__)
 
 _DOMAIN_SERVICES_REGISTERED = "_services_registered"
+_SETUP_LOCKS_KEY = "_setup_locks"
+_SETUP_DONE_PREFIX = "_setup_done_"
+_UPDATE_LISTENER_PREFIX = "_update_listener_"
 
 
 def _iter_entry_ids(domain_data: dict[str, Any]) -> list[str]:
@@ -297,137 +300,161 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     domain_data = hass.data[DOMAIN]
 
-    tenant_id = entry.data.get("tenant_id")
-    client_id = entry.data.get("client_id")
-    # Use client_secret from options if updated, otherwise fall back to initial config
-    client_secret = entry.options.get("client_secret") or entry.data.get("client_secret")
-    site_url = entry.data.get("site_url")
-    library_name = entry.options.get(
-        CONF_LIBRARY_NAME,
-        entry.data.get(CONF_LIBRARY_NAME, DEFAULT_LIBRARY_NAME),
-    )
-    base_folder_path = entry.options.get(
-        CONF_BASE_FOLDER_PATH,
-        entry.data.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH),
-    )
-    recent_history_size = entry.options.get(
-        CONF_FOLDER_HISTORY_SIZE,
-        entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE),
-    )
-    min_photos_per_folder = entry.options.get(
-        CONF_MIN_PHOTO_COUNT,
-        entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT),
-    )
-    rotation_interval_seconds = entry.options.get(
-        CONF_ROTATION_INTERVAL_SECONDS,
-        entry.data.get(CONF_ROTATION_INTERVAL_SECONDS, DEFAULT_ROTATION_INTERVAL_SECONDS),
-    )
+    setup_locks = domain_data.setdefault(_SETUP_LOCKS_KEY, {})
+    entry_lock = setup_locks.get(entry.entry_id)
+    if entry_lock is None:
+        entry_lock = asyncio.Lock()
+        setup_locks[entry.entry_id] = entry_lock
 
-    client = SharePointPhotosApiClient(
-        hass=hass,
-        tenant_id=tenant_id,
-        client_id=client_id,
-        client_secret=client_secret,
-        site_url=site_url,
-        library_name=library_name,
-        base_folder_path=base_folder_path,
-        recent_history_size=recent_history_size,
-        min_photos_per_folder=min_photos_per_folder,
-    )
+    async with entry_lock:
+        setup_done_key = f"{_SETUP_DONE_PREFIX}{entry.entry_id}"
+        if domain_data.get(setup_done_key):
+            _LOGGER.debug("Setup already completed for entry %s, skipping duplicate setup", entry.entry_id)
+            return True
 
-    coordinator = SharePointPhotosDataUpdateCoordinator(
-        hass,
-        client=client,
-        entry_id=entry.entry_id,
-        rotation_interval_seconds=rotation_interval_seconds,
-    )
+        tenant_id = entry.data.get("tenant_id")
+        client_id = entry.data.get("client_id")
+        # Use client_secret from options if updated, otherwise fall back to initial config
+        client_secret = entry.options.get("client_secret") or entry.data.get("client_secret")
+        site_url = entry.data.get("site_url")
+        library_name = entry.options.get(
+            CONF_LIBRARY_NAME,
+            entry.data.get(CONF_LIBRARY_NAME, DEFAULT_LIBRARY_NAME),
+        )
+        base_folder_path = entry.options.get(
+            CONF_BASE_FOLDER_PATH,
+            entry.data.get(CONF_BASE_FOLDER_PATH, DEFAULT_BASE_FOLDER_PATH),
+        )
+        recent_history_size = entry.options.get(
+            CONF_FOLDER_HISTORY_SIZE,
+            entry.data.get(CONF_FOLDER_HISTORY_SIZE, DEFAULT_FOLDER_HISTORY_SIZE),
+        )
+        min_photos_per_folder = entry.options.get(
+            CONF_MIN_PHOTO_COUNT,
+            entry.data.get(CONF_MIN_PHOTO_COUNT, DEFAULT_MIN_PHOTO_COUNT),
+        )
+        rotation_interval_seconds = entry.options.get(
+            CONF_ROTATION_INTERVAL_SECONDS,
+            entry.data.get(CONF_ROTATION_INTERVAL_SECONDS, DEFAULT_ROTATION_INTERVAL_SECONDS),
+        )
 
-    # Set empty placeholder data so entities are available immediately,
-    # then schedule the actual folder scan as a background task.
-    coordinator.async_set_updated_data(coordinator.build_initial_state())
-    previous_coordinator = domain_data.get(entry.entry_id)
-    if previous_coordinator and previous_coordinator is not coordinator:
-        try:
-            previous_coordinator.stop_rotation_timer()
-        except Exception:
-            _LOGGER.debug("Failed to stop previous coordinator timer for entry %s", entry.entry_id)
-    domain_data[entry.entry_id] = coordinator
+        client = SharePointPhotosApiClient(
+            hass=hass,
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            site_url=site_url,
+            library_name=library_name,
+            base_folder_path=base_folder_path,
+            recent_history_size=recent_history_size,
+            min_photos_per_folder=min_photos_per_folder,
+        )
 
-    async def _deferred_first_refresh(_=None):
-        """Run the first full folder scan after startup completes."""
-        _LOGGER.info("Starting deferred first refresh for SharePoint Photos")
-        await coordinator.async_request_refresh()
+        coordinator = SharePointPhotosDataUpdateCoordinator(
+            hass,
+            client=client,
+            entry_id=entry.entry_id,
+            rotation_interval_seconds=rotation_interval_seconds,
+        )
 
-    hass.async_create_task(_deferred_first_refresh())
+        # Set empty placeholder data so entities are available immediately,
+        # then schedule the actual folder scan as a background task.
+        coordinator.async_set_updated_data(coordinator.build_initial_state())
+        previous_coordinator = domain_data.get(entry.entry_id)
+        if previous_coordinator and previous_coordinator is not coordinator:
+            try:
+                previous_coordinator.stop_rotation_timer()
+            except Exception:
+                _LOGGER.debug("Failed to stop previous coordinator timer for entry %s", entry.entry_id)
+        domain_data[entry.entry_id] = coordinator
 
-    # Register the image proxy view (only if not already registered)
-    if not hasattr(hass.http, '_sharepoint_photos_proxy_registered'):
-        hass.http.register_view(SharePointImageProxyView(hass))
-        hass.http._sharepoint_photos_proxy_registered = True
-        _LOGGER.debug("Registered SharePoint Photos image proxy view")
+        async def _deferred_first_refresh(_=None):
+            """Run the first full folder scan after startup completes."""
+            _LOGGER.info("Starting deferred first refresh for SharePoint Photos")
+            await coordinator.async_request_refresh()
 
-    if not hasattr(hass.http, '_sharepoint_photos_current_view_registered'):
-        hass.http.register_view(SharePointCurrentImageView(hass))
-        hass.http._sharepoint_photos_current_view_registered = True
-        _LOGGER.debug("Registered SharePoint Photos current image view")
+        hass.async_create_task(_deferred_first_refresh())
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+        # Register the image proxy view (only if not already registered)
+        if not hasattr(hass.http, '_sharepoint_photos_proxy_registered'):
+            hass.http.register_view(SharePointImageProxyView(hass))
+            hass.http._sharepoint_photos_proxy_registered = True
+            _LOGGER.debug("Registered SharePoint Photos image proxy view")
 
-    # Register domain services only once across reloads.
-    if not domain_data.get(_DOMAIN_SERVICES_REGISTERED):
+        if not hasattr(hass.http, '_sharepoint_photos_current_view_registered'):
+            hass.http.register_view(SharePointCurrentImageView(hass))
+            hass.http._sharepoint_photos_current_view_registered = True
+            _LOGGER.debug("Registered SharePoint Photos current image view")
 
-        async def handle_refresh_photos(call):
-            """Handle the refresh photos service call - switches to a NEW random folder."""
-            requested_entry_id = call.data.get("entry_id")
-            target = _resolve_target_coordinator(hass, requested_entry_id)
-            if not target:
-                _LOGGER.warning("No coordinator available for refresh_photos service")
-                return
-            await target.async_refresh_new_folder()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-        async def handle_select_folder(call):
-            """Handle the select folder service call."""
-            folder_path = call.data.get("folder_path")
-            if not folder_path:
-                return
+        listener_key = f"{_UPDATE_LISTENER_PREFIX}{entry.entry_id}"
+        old_listener_unsub = domain_data.get(listener_key)
+        if old_listener_unsub:
+            try:
+                old_listener_unsub()
+            except Exception:
+                _LOGGER.debug("Failed to remove previous update listener for entry %s", entry.entry_id)
 
-            requested_entry_id = call.data.get("entry_id")
-            target = _resolve_target_coordinator(hass, requested_entry_id)
-            if not target:
-                _LOGGER.warning("No coordinator available for select_folder service")
-                return
+        listener_unsub = entry.add_update_listener(async_reload_entry)
+        entry.async_on_unload(listener_unsub)
+        domain_data[listener_key] = listener_unsub
 
-            await target.client.select_specific_folder(folder_path)
-            await target.async_request_refresh()
+        # Register domain services only once across reloads.
+        if not domain_data.get(_DOMAIN_SERVICES_REGISTERED):
 
-        async def handle_refresh_token(call):
-            """Handle the refresh token service call."""
-            requested_entry_id = call.data.get("entry_id")
-            target = _resolve_target_coordinator(hass, requested_entry_id)
-            if not target:
-                _LOGGER.warning("No coordinator available for refresh_token service")
-                return
+            async def handle_refresh_photos(call):
+                """Handle the refresh photos service call - switches to a NEW random folder."""
+                requested_entry_id = call.data.get("entry_id")
+                target = _resolve_target_coordinator(hass, requested_entry_id)
+                if not target:
+                    _LOGGER.warning("No coordinator available for refresh_photos service")
+                    return
+                await target.async_refresh_new_folder()
 
-            # Clear the current token to force re-authentication
-            target.client._access_token = None
-            target.client._token_expires = None
-            _LOGGER.info("Cleared authentication token, next API call will re-authenticate")
-            # Refresh current folder data (don't change folders)
-            await target.async_request_refresh()
+            async def handle_select_folder(call):
+                """Handle the select folder service call."""
+                folder_path = call.data.get("folder_path")
+                if not folder_path:
+                    return
 
-        if not hass.services.has_service(DOMAIN, "refresh_photos"):
-            hass.services.async_register(DOMAIN, "refresh_photos", handle_refresh_photos)
-        if not hass.services.has_service(DOMAIN, "select_folder"):
-            hass.services.async_register(DOMAIN, "select_folder", handle_select_folder)
-        if not hass.services.has_service(DOMAIN, "refresh_token"):
-            hass.services.async_register(DOMAIN, "refresh_token", handle_refresh_token)
+                requested_entry_id = call.data.get("entry_id")
+                target = _resolve_target_coordinator(hass, requested_entry_id)
+                if not target:
+                    _LOGGER.warning("No coordinator available for select_folder service")
+                    return
 
-        domain_data[_DOMAIN_SERVICES_REGISTERED] = True
+                await target.client.select_specific_folder(folder_path)
+                await target.async_request_refresh()
 
-    coordinator.start_rotation_timer()
+            async def handle_refresh_token(call):
+                """Handle the refresh token service call."""
+                requested_entry_id = call.data.get("entry_id")
+                target = _resolve_target_coordinator(hass, requested_entry_id)
+                if not target:
+                    _LOGGER.warning("No coordinator available for refresh_token service")
+                    return
 
-    return True
+                # Clear the current token to force re-authentication
+                target.client._access_token = None
+                target.client._token_expires = None
+                _LOGGER.info("Cleared authentication token, next API call will re-authenticate")
+                # Refresh current folder data (don't change folders)
+                await target.async_request_refresh()
+
+            if not hass.services.has_service(DOMAIN, "refresh_photos"):
+                hass.services.async_register(DOMAIN, "refresh_photos", handle_refresh_photos)
+            if not hass.services.has_service(DOMAIN, "select_folder"):
+                hass.services.async_register(DOMAIN, "select_folder", handle_select_folder)
+            if not hass.services.has_service(DOMAIN, "refresh_token"):
+                hass.services.async_register(DOMAIN, "refresh_token", handle_refresh_token)
+
+            domain_data[_DOMAIN_SERVICES_REGISTERED] = True
+
+        coordinator.start_rotation_timer()
+        domain_data[setup_done_key] = True
+
+        return True
 
 
 class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
@@ -653,9 +680,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         unloaded = True
 
     if unloaded:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-
         domain_data = hass.data.get(DOMAIN, {})
+        domain_data.pop(entry.entry_id, None)
+
+        setup_done_key = f"{_SETUP_DONE_PREFIX}{entry.entry_id}"
+        domain_data.pop(setup_done_key, None)
+
+        listener_key = f"{_UPDATE_LISTENER_PREFIX}{entry.entry_id}"
+        domain_data.pop(listener_key, None)
+
+        setup_locks = domain_data.get(_SETUP_LOCKS_KEY, {})
+        setup_locks.pop(entry.entry_id, None)
+
         if not _iter_entry_ids(domain_data):
             if hass.services.has_service(DOMAIN, "refresh_photos"):
                 hass.services.async_remove(DOMAIN, "refresh_photos")
