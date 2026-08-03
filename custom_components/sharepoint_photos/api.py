@@ -646,14 +646,14 @@ class SharePointPhotosApiClient:
             # to refresh the photo data to get new URLs.
             async with self._session.get(download_url) as response:
                 if response.status == 401:
-                    _LOGGER.warning("Download URL expired (401), this requires refreshing photo data")
+                    _LOGGER.debug("Download URL expired (401), refreshing photo data")
                     # Clear our access token to force re-authentication on next API call
                     self._access_token = None
                     self._token_expires = None
                     # Return the error info so the caller can handle it appropriately
                     return b"", "", 401
                 elif response.status == 403:
-                    _LOGGER.warning("Download URL denied (403), this requires refreshing photo data")
+                    _LOGGER.debug("Download URL denied (403), refreshing photo data")
                     self._access_token = None
                     self._token_expires = None
                     return b"", "", 403

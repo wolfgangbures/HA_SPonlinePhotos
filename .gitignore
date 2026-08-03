@@ -1,5 +1,12 @@
 # Local Home Assistant logs
 homeassistant.log
+ha_*_logs_latest.txt
 
 # Generic logs
 *.log
+
+# Python cache
+__pycache__/
+
+# Local tooling output
+tools/.tmp/

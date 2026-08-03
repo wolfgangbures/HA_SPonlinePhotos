@@ -1,0 +1,2 @@
+tools/** export-ignore
+ha_*_logs_latest.txt export-ignore
