@@ -314,6 +314,7 @@ class SharePointCurrentImageView(HomeAssistantView):
                     return response
                 return web.Response(status=404, text="Integration not found")
 
+            await coordinator.async_ensure_recent_image()
             content, content_type = await coordinator.async_get_or_load_current_image()
             if content:
                 normalized_content_type = self._normalize_content_type(content_type)
@@ -546,8 +547,12 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
         self.rotation_interval_seconds = max(5, int(rotation_interval_seconds or DEFAULT_ROTATION_INTERVAL_SECONDS))
         self._current_photo_index: int | None = None
         self._current_photo_name: str | None = None
+        self._image_version: int = 0
         self._current_image_bytes: bytes | None = None
         self._current_image_type: str = "image/jpeg"
+        self._current_image_loaded_monotonic: float | None = None
+        self._last_on_demand_rotate_monotonic: float = 0.0
+        self._on_demand_rotate_cooldown_seconds = max(5.0, min(30.0, self.rotation_interval_seconds / 2))
         self._image_lock = asyncio.Lock()
         self._rotation_unsub = None
         self._rotation_task: asyncio.Task | None = None
@@ -563,7 +568,7 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
         return {
             "photos": [],
             "photo_count": 0,
-            "current_proxy_url": f"/api/sharepoint_photos/current/{self.entry_id}",
+            "current_proxy_url": f"/api/sharepoint_photos/current/{self.entry_id}?v={self._image_version}",
             "rotation_interval_seconds": self.rotation_interval_seconds,
             "current_photo_index": None,
             "current_photo_name": None,
@@ -579,7 +584,7 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
     def _build_state_payload(self, data: dict[str, Any]) -> dict[str, Any]:
         """Attach current-image metadata to coordinator payload."""
         payload = dict(data)
-        payload["current_proxy_url"] = f"/api/sharepoint_photos/current/{self.entry_id}"
+        payload["current_proxy_url"] = f"/api/sharepoint_photos/current/{self.entry_id}?v={self._image_version}"
         payload["rotation_interval_seconds"] = self.rotation_interval_seconds
         payload["photo_count"] = len(payload.get("photos", []))
         payload["current_photo_index"] = self._current_photo_index
@@ -610,11 +615,14 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
                     self._current_image_type = content_type
                 self._current_photo_index = idx
                 self._current_photo_name = candidate.get("name")
+                self._image_version += 1
+                self._current_image_loaded_monotonic = time.monotonic()
                 _LOGGER.debug(
-                    "Swapped current photo (index=%s, name=%s, bytes=%d)",
+                    "Swapped current photo (index=%s, name=%s, bytes=%d, version=%s)",
                     self._current_photo_index,
                     self._current_photo_name,
                     len(content),
+                    self._image_version,
                 )
                 return True
 
@@ -635,7 +643,26 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
             swapped = await self._try_swap_current_photo(photos, force=force)
             if swapped:
                 self.async_set_updated_data(self._build_state_payload(data))
-            return swapped
+                return True
+
+        # If a rotation attempt failed but we still have photo metadata, URLs may be stale.
+        # Refresh folder data to regenerate Graph download URLs, then retry once.
+        if (self.data or {}).get("photos"):
+            _LOGGER.warning("Rotation swap failed; refreshing folder data before one retry")
+            try:
+                await self.async_request_refresh()
+            except Exception:
+                _LOGGER.exception("Failed to refresh data during rotation recovery")
+
+            async with self._image_lock:
+                refreshed_data = self.data or {}
+                refreshed_photos = refreshed_data.get("photos", [])
+                swapped = await self._try_swap_current_photo(refreshed_photos, force=True)
+                if swapped:
+                    self.async_set_updated_data(self._build_state_payload(refreshed_data))
+                    return True
+
+        return False
 
     async def async_get_or_load_current_image(self) -> tuple[bytes | None, str | None]:
         """Return cached current image, loading one if cache is still empty."""
@@ -671,6 +698,32 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
                     await self._try_swap_current_photo(refreshed_photos, force=True)
 
         return self._current_image_bytes, self._current_image_type
+
+    async def async_ensure_recent_image(self) -> None:
+        """Ensure current image is not stale when consumers continuously request it."""
+        now = time.monotonic()
+
+        if self._current_image_loaded_monotonic is None:
+            await self.async_get_or_load_current_image()
+            return
+
+        max_allowed_age = max(15.0, float(self.rotation_interval_seconds) * 1.5)
+        age_seconds = now - self._current_image_loaded_monotonic
+        if age_seconds <= max_allowed_age:
+            return
+
+        if now - self._last_on_demand_rotate_monotonic < self._on_demand_rotate_cooldown_seconds:
+            return
+
+        self._last_on_demand_rotate_monotonic = now
+        _LOGGER.warning(
+            "Current image age %.1fs exceeds threshold %.1fs; triggering on-demand rotation",
+            age_seconds,
+            max_allowed_age,
+        )
+        rotated = await self.async_rotate_current_photo(force=False)
+        if not rotated:
+            _LOGGER.warning("On-demand rotation did not swap to a new image")
 
     @callback
     def _async_rotation_tick(self, now=None) -> None:
