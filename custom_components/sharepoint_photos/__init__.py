@@ -261,28 +261,100 @@ class SharePointCurrentImageView(HomeAssistantView):
     def __init__(self, hass: HomeAssistant):
         """Initialize the current-image view."""
         self.hass = hass
+        self._last_success: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _normalize_content_type(content_type: str | None) -> str:
+        """Return a browser-safe image content type."""
+        if content_type and content_type.lower().startswith("image/"):
+            return content_type
+        return "image/jpeg"
+
+    @staticmethod
+    def _build_response(
+        content: bytes,
+        content_type: str,
+        etag: str,
+        include_body: bool = True,
+        cache_control: str = "no-store",
+    ):
+        """Build a consistent image response."""
+        from aiohttp import web
+
+        headers = {
+            "Cache-Control": cache_control,
+            "Content-Length": str(len(content)),
+            "Content-Disposition": "inline",
+            "Access-Control-Allow-Origin": "*",
+            "ETag": etag,
+        }
+
+        if include_body:
+            return web.Response(body=content, content_type=content_type, headers=headers)
+        return web.Response(status=200, content_type=content_type, headers=headers)
 
     async def _handle(self, entry_id: str, include_body: bool = True):
         """Return the current cached image."""
         from aiohttp import web
 
-        coordinator = self.hass.data.get(DOMAIN, {}).get(entry_id)
-        if not coordinator:
-            return web.Response(status=404, text="Integration not found")
+        stale = self._last_success.get(entry_id)
 
-        content, content_type = await coordinator.async_get_or_load_current_image()
-        if not content:
+        try:
+            coordinator = self.hass.data.get(DOMAIN, {}).get(entry_id)
+            if not coordinator:
+                if stale:
+                    response = self._build_response(
+                        stale["content"],
+                        stale["content_type"],
+                        stale["etag"],
+                        include_body=include_body,
+                        cache_control="public, max-age=30, must-revalidate",
+                    )
+                    response.headers["X-SharePoint-Current"] = "stale-cache-no-coordinator"
+                    return response
+                return web.Response(status=404, text="Integration not found")
+
+            content, content_type = await coordinator.async_get_or_load_current_image()
+            if content:
+                normalized_content_type = self._normalize_content_type(content_type)
+                etag = hashlib.md5(content).hexdigest()  # nosec - weak hash is fine for cache validation
+                self._last_success[entry_id] = {
+                    "content": content,
+                    "content_type": normalized_content_type,
+                    "etag": etag,
+                }
+                return self._build_response(
+                    content,
+                    normalized_content_type,
+                    etag,
+                    include_body=include_body,
+                )
+
+            if stale:
+                response = self._build_response(
+                    stale["content"],
+                    stale["content_type"],
+                    stale["etag"],
+                    include_body=include_body,
+                    cache_control="public, max-age=30, must-revalidate",
+                )
+                response.headers["X-SharePoint-Current"] = "stale-cache-empty-current"
+                return response
+
             return web.Response(status=503, text="Current image not available")
-
-        response_headers = {
-            "Cache-Control": "no-store",
-            "Content-Length": str(len(content)),
-            "Content-Disposition": "inline",
-            "Access-Control-Allow-Origin": "*",
-        }
-        if include_body:
-            return web.Response(body=content, content_type=content_type or "image/jpeg", headers=response_headers)
-        return web.Response(status=200, content_type=content_type or "image/jpeg", headers=response_headers)
+        except Exception as exc:
+            _LOGGER.error("Error serving current image for entry %s: %s", entry_id, exc)
+            if stale:
+                response = self._build_response(
+                    stale["content"],
+                    stale["content_type"],
+                    stale["etag"],
+                    include_body=include_body,
+                    cache_control="public, max-age=30, must-revalidate",
+                )
+                response.headers["X-SharePoint-Current"] = "stale-cache-exception"
+                return response
+            return web.Response(status=500, text="Internal server error")
 
     async def get(self, request, entry_id: str):
         """Return current image body."""
@@ -570,6 +642,8 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
         if self._current_image_bytes:
             return self._current_image_bytes, self._current_image_type
 
+        had_photos = bool((self.data or {}).get("photos"))
+
         async with self._image_lock:
             if self._current_image_bytes:
                 return self._current_image_bytes, self._current_image_type
@@ -579,6 +653,22 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
             swapped = await self._try_swap_current_photo(photos, force=True)
             if swapped:
                 self.async_set_updated_data(self._build_state_payload(data))
+
+        # If we had photos but still failed to load bytes, the stored download URLs
+        # may have expired. Force a coordinator refresh to rebuild URLs and retry.
+        if had_photos and not self._current_image_bytes:
+            _LOGGER.warning(
+                "Current image bytes unavailable despite photo metadata; refreshing coordinator data"
+            )
+            try:
+                await self.async_request_refresh()
+            except Exception:
+                _LOGGER.exception("Failed to refresh data while recovering current image")
+
+            async with self._image_lock:
+                if not self._current_image_bytes:
+                    refreshed_photos = (self.data or {}).get("photos", [])
+                    await self._try_swap_current_photo(refreshed_photos, force=True)
 
         return self._current_image_bytes, self._current_image_type
 
