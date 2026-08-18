@@ -554,6 +554,8 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
         self._current_image_loaded_monotonic: float | None = None
         self._last_on_demand_rotate_monotonic: float = 0.0
         self._on_demand_rotate_cooldown_seconds = max(5.0, min(30.0, self.rotation_interval_seconds / 2))
+        self._last_empty_recovery_monotonic: float = 0.0
+        self._empty_recovery_cooldown_seconds = 300.0
         self._image_lock = asyncio.Lock()
         self._rotation_unsub = None
         self._rotation_task: asyncio.Task | None = None
@@ -636,8 +638,21 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
 
         return False
 
+    async def _async_recover_empty_photos(self) -> bool:
+        """Re-select a folder after the cached photo list was emptied by an API error."""
+        now = time.monotonic()
+        if now - self._last_empty_recovery_monotonic < self._empty_recovery_cooldown_seconds:
+            return False
+
+        self._last_empty_recovery_monotonic = now
+        _LOGGER.warning("No photos cached; attempting recovery by selecting a new folder")
+        return await self.async_refresh_new_folder() is not None
+
     async def async_rotate_current_photo(self, force: bool = False) -> bool:
         """Rotate to a new random photo from the current folder."""
+        if not (self.data or {}).get("photos"):
+            return await self._async_recover_empty_photos()
+
         async with self._image_lock:
             data = self.data or {}
             photos = data.get("photos", [])
@@ -777,11 +792,16 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
                 await self._try_swap_current_photo(data["photos"], force=True)
             else:
                 _LOGGER.warning("No photos found in data update")
-                
+                if (self.data or {}).get("photos"):
+                    # Keep the previously working folder instead of publishing an empty payload.
+                    raise UpdateFailed("Folder refresh returned no photos")
+
             if not data:
                 data = self.build_initial_state()
 
             return self._build_state_payload(data)
+        except UpdateFailed:
+            raise
         except Exception as exception:
             _LOGGER.error("Error during data update: %s", str(exception))
             import traceback
