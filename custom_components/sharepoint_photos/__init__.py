@@ -664,7 +664,7 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
         # If a rotation attempt failed but we still have photo metadata, URLs may be stale.
         # Refresh folder data to regenerate Graph download URLs, then retry once.
         if (self.data or {}).get("photos"):
-            _LOGGER.warning("Rotation swap failed; refreshing folder data before one retry")
+            _LOGGER.debug("Rotation swap failed; refreshing folder data before one retry")
             try:
                 await self.async_request_refresh()
             except Exception:
@@ -677,6 +677,8 @@ class SharePointPhotosDataUpdateCoordinator(DataUpdateCoordinator):
                 if swapped:
                     self.async_set_updated_data(self._build_state_payload(refreshed_data))
                     return True
+
+            _LOGGER.warning("Rotation swap failed after refreshing folder data")
 
         return False
 
